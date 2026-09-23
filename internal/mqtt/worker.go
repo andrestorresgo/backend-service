@@ -9,10 +9,6 @@ import (
 	"github.com/andrestorresgo/backend-service/internal/service"
 )
 
-const (
-	TopicAuthRequest  = "factory/auth/request"
-	TopicAuthResponse = "factory/auth/response"
-)
 
 // Authenticator defines the domain contract for processing authentication requests.
 type Authenticator interface {

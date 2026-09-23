@@ -56,15 +56,20 @@ func main() {
 
 	var pinger db.DBPinger
 	var authService *service.AuthService
+	var stateService *service.StateService
 	if pool != nil {
 		pinger = pool
 		authRepo := db.NewPostgresAuthRepository(pool)
 		authService = service.NewAuthService(authRepo, service.RealClock{})
+		stateRepo := db.NewPostgresStateRepository(pool)
+		stateService = service.NewStateService(stateRepo, service.RealClock{})
 	}
 
 	// Initialize MQTT client and workers if broker host is configured
 	var mqttClient *mqtt.Client
 	var authWorker *mqtt.AuthWorker
+	var telemetryWorker *mqtt.TelemetryWorker
+	var rolloverWorker *mqtt.RolloverWorker
 	var detectionService *service.DetectionService
 	if cfg.MQTTBrokerHost != "" {
 		var mqttErr error
@@ -78,6 +83,19 @@ func main() {
 				authWorker.Start()
 				if err := mqttClient.SubscribeAuthRequest(authWorker); err != nil {
 					log.Printf("[ERROR] Failed to subscribe auth worker to MQTT: %v", err)
+				}
+			}
+			if stateService != nil {
+				telemetryWorker = mqtt.NewTelemetryWorker(stateService, 100)
+				telemetryWorker.Start()
+				if err := mqttClient.SubscribeTelemetry(telemetryWorker); err != nil {
+					log.Printf("[ERROR] Failed to subscribe telemetry worker to MQTT: %v", err)
+				}
+
+				rolloverWorker = mqtt.NewRolloverWorker(stateService, 100)
+				rolloverWorker.Start()
+				if err := mqttClient.SubscribeRollover(rolloverWorker); err != nil {
+					log.Printf("[ERROR] Failed to subscribe rollover worker to MQTT: %v", err)
 				}
 			}
 			detectionService = service.NewDetectionService(mqttClient, service.RealClock{})
@@ -111,6 +129,16 @@ func main() {
 	if authWorker != nil {
 		authWorker.Stop()
 		log.Println("[INFO] Auth worker stopped.")
+	}
+
+	if telemetryWorker != nil {
+		telemetryWorker.Stop()
+		log.Println("[INFO] Telemetry worker stopped.")
+	}
+
+	if rolloverWorker != nil {
+		rolloverWorker.Stop()
+		log.Println("[INFO] Rollover worker stopped.")
 	}
 
 	if mqttClient != nil {

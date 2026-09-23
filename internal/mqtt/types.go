@@ -1,8 +1,13 @@
 package mqtt
 
-// Topic constants
+// Topic constants matching hardware and cloud broker configuration
 const (
-	TopicDetections = "factory/detections"
+	TopicAuthRequest   = "factory/auth/request"
+	TopicAuthResponse  = "factory/auth/response"
+	TopicDetections    = "factory/detections"
+	TopicTelemetry     = "factory/telemetry"
+	TopicRollover      = "factory/rollover"
+	TopicActuatorServo = "factory/actuator/servo"
 )
 
 // Publisher abstracts MQTT message publication.
@@ -22,3 +27,21 @@ type ShapeDetectionMessage struct {
 	ShapeName   string `json:"shape_name"`
 	DetectionID int    `json:"detection_id"`
 }
+
+// TelemetryPayload defines the JSON payload received from Board A on factory/telemetry.
+type TelemetryPayload struct {
+	IsPaused   bool `json:"is_paused"`
+	MotorState bool `json:"motor_state"`
+	ServoState bool `json:"servo_state"`
+	RedCount   int  `json:"red_count"`
+	GreenCount int  `json:"green_count"`
+	BlueCount  int  `json:"blue_count"`
+}
+
+// BatchRolloverPayload defines the JSON payload received from Board A on factory/rollover.
+type BatchRolloverPayload struct {
+	ShapeID   int    `json:"shape_id"`
+	ShapeName string `json:"shape_name"`
+	Timestamp int64  `json:"timestamp"`
+}
+

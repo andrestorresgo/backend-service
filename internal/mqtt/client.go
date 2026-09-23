@@ -101,6 +101,41 @@ func (c *Client) SubscribeAuthRequest(worker *AuthWorker) error {
 	return nil
 }
 
+// SubscribeTelemetry subscribes the worker to factory/telemetry.
+func (c *Client) SubscribeTelemetry(worker *TelemetryWorker) error {
+	if c.pahoClient == nil || !c.pahoClient.IsConnected() {
+		return errors.New("mqtt client is not connected")
+	}
+
+	token := c.pahoClient.Subscribe(TopicTelemetry, 1, func(_ paho.Client, msg paho.Message) {
+		worker.HandleMessage(msg.Payload())
+	})
+	if token.WaitTimeout(5*time.Second) && token.Error() != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", TopicTelemetry, token.Error())
+	}
+
+	log.Printf("[INFO] Subscribed to MQTT topic: %s", TopicTelemetry)
+	return nil
+}
+
+// SubscribeRollover subscribes the worker to factory/rollover.
+func (c *Client) SubscribeRollover(worker *RolloverWorker) error {
+	if c.pahoClient == nil || !c.pahoClient.IsConnected() {
+		return errors.New("mqtt client is not connected")
+	}
+
+	token := c.pahoClient.Subscribe(TopicRollover, 1, func(_ paho.Client, msg paho.Message) {
+		worker.HandleMessage(msg.Payload())
+	})
+	if token.WaitTimeout(5*time.Second) && token.Error() != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", TopicRollover, token.Error())
+	}
+
+	log.Printf("[INFO] Subscribed to MQTT topic: %s", TopicRollover)
+	return nil
+}
+
+
 // Disconnect gracefully disconnects from the broker.
 func (c *Client) Disconnect(quiesceMs uint) {
 	if c.pahoClient != nil && c.pahoClient.IsConnected() {
