@@ -23,9 +23,11 @@ type mockStateRepo struct {
 	rolloverTime      time.Time
 	rolloverErr       error
 
-	systemState *service.SystemState
-	shapeCounts []service.ShapeCount
-	getErr      error
+	systemState  *service.SystemState
+	shapeCounts  []service.ShapeCount
+	recentAudits []service.AuditRecord
+	getErr       error
+	auditsErr    error
 }
 
 func (m *mockStateRepo) UpdateTelemetry(ctx context.Context, state service.SystemState, counts map[int]int, updatedAt time.Time) error {
@@ -71,6 +73,15 @@ func (m *mockStateRepo) GetShapeCounts(ctx context.Context) ([]service.ShapeCoun
 		return nil, m.getErr
 	}
 	return m.shapeCounts, nil
+}
+
+func (m *mockStateRepo) GetRecentAudits(ctx context.Context, limit int) ([]service.AuditRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.auditsErr != nil {
+		return nil, m.auditsErr
+	}
+	return m.recentAudits, nil
 }
 
 func TestStateService_UpdateTelemetry_Success(t *testing.T) {
@@ -326,4 +337,114 @@ func TestStateService_GetSystemState_And_GetShapeCounts(t *testing.T) {
 	if len(counts) != 3 {
 		t.Fatalf("expected 3 shape counts, got %d", len(counts))
 	}
+}
+
+func TestStateService_GetSnapshot_Success(t *testing.T) {
+	clock := newMockClock(time.Now())
+	userID := 1
+	expectedState := &service.SystemState{
+		ID:         1,
+		IsPaused:   false,
+		MotorState: true,
+		ServoState: false,
+	}
+	expectedCounts := []service.ShapeCount{
+		{ShapeID: 1, ShapeName: "circle", ColorLabel: "red", LiveBuffer: 2, TotalLifetime: 10},
+		{ShapeID: 2, ShapeName: "triangle", ColorLabel: "green", LiveBuffer: 0, TotalLifetime: 5},
+		{ShapeID: 3, ShapeName: "square", ColorLabel: "blue", LiveBuffer: 4, TotalLifetime: 15},
+	}
+	expectedAudits := []service.AuditRecord{
+		{
+			ID:        "uuid-1",
+			Source:    service.AuthSourceDashboard,
+			UserID:    &userID,
+			Status:    service.AuditStatusSuccess,
+			Timestamp: time.Now(),
+		},
+	}
+
+	repo := &mockStateRepo{
+		systemState:  expectedState,
+		shapeCounts:  expectedCounts,
+		recentAudits: expectedAudits,
+	}
+	svc := service.NewStateService(repo, clock)
+
+	// Test with mqttConnected = true
+	snapshot, err := svc.GetSnapshot(context.Background(), true)
+	if err != nil {
+		t.Fatalf("unexpected error getting snapshot: %v", err)
+	}
+
+	if snapshot.SystemState == nil || snapshot.SystemState.ID != 1 {
+		t.Errorf("expected SystemState ID 1, got %+v", snapshot.SystemState)
+	}
+	if len(snapshot.ShapeCounts) != 3 {
+		t.Errorf("expected 3 shape counts, got %d", len(snapshot.ShapeCounts))
+	}
+	if len(snapshot.RecentAudits) != 1 {
+		t.Errorf("expected 1 recent audit, got %d", len(snapshot.RecentAudits))
+	}
+	if !snapshot.MQTTConnected {
+		t.Errorf("expected MQTTConnected true, got %v", snapshot.MQTTConnected)
+	}
+
+	// Test with mqttConnected = false
+	snapshotFalse, err := svc.GetSnapshot(context.Background(), false)
+	if err != nil {
+		t.Fatalf("unexpected error getting snapshot: %v", err)
+	}
+	if snapshotFalse.MQTTConnected {
+		t.Errorf("expected MQTTConnected false, got %v", snapshotFalse.MQTTConnected)
+	}
+}
+
+func TestStateService_GetSnapshot_EmptySlicesNonNull(t *testing.T) {
+	clock := newMockClock(time.Now())
+	repo := &mockStateRepo{
+		systemState:  &service.SystemState{ID: 1},
+		shapeCounts:  nil,
+		recentAudits: nil,
+	}
+	svc := service.NewStateService(repo, clock)
+
+	snapshot, err := svc.GetSnapshot(context.Background(), false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if snapshot.ShapeCounts == nil {
+		t.Error("expected non-nil empty shape counts slice")
+	}
+	if snapshot.RecentAudits == nil {
+		t.Error("expected non-nil empty recent audits slice")
+	}
+}
+
+func TestStateService_GetSnapshot_ErrorHandling(t *testing.T) {
+	clock := newMockClock(time.Now())
+
+	t.Run("SystemState repo error", func(t *testing.T) {
+		repo := &mockStateRepo{getErr: errors.New("db error")}
+		svc := service.NewStateService(repo, clock)
+
+		_, err := svc.GetSnapshot(context.Background(), true)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("RecentAudits repo error", func(t *testing.T) {
+		repo := &mockStateRepo{
+			systemState: &service.SystemState{ID: 1},
+			shapeCounts: []service.ShapeCount{},
+			auditsErr:   errors.New("audit query failed"),
+		}
+		svc := service.NewStateService(repo, clock)
+
+		_, err := svc.GetSnapshot(context.Background(), true)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
 }

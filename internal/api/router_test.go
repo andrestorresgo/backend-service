@@ -27,7 +27,7 @@ func TestHealthCheck_Connected(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	pinger := &mockDBPinger{pingErr: nil}
-	router := api.NewRouter(cfg, pinger, nil, nil)
+	router := api.NewRouter(cfg, pinger, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -59,7 +59,7 @@ func TestHealthCheck_DegradedWhenDBFails(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	pinger := &mockDBPinger{pingErr: errors.New("connection refused")}
-	router := api.NewRouter(cfg, pinger, nil, nil)
+	router := api.NewRouter(cfg, pinger, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -90,7 +90,7 @@ func TestHealthCheck_NilPinger(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"*"},
 	}
-	router := api.NewRouter(cfg, nil, nil, nil)
+	router := api.NewRouter(cfg, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -119,7 +119,7 @@ func TestHealthCheck_TypedNilPinger(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	var typedNil *mockDBPinger = nil
-	router := api.NewRouter(cfg, typedNil, nil, nil)
+	router := api.NewRouter(cfg, typedNil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -147,7 +147,7 @@ func TestCORSHeaders(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"https://dashboard.example.com"},
 	}
-	router := api.NewRouter(cfg, nil, nil, nil)
+	router := api.NewRouter(cfg, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodOptions, "/healthz", nil)
 	req.Header.Set("Origin", "https://dashboard.example.com")
@@ -166,7 +166,7 @@ func TestPanicRecovery(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"*"},
 	}
-	router := api.NewRouter(cfg, nil, nil, nil)
+	router := api.NewRouter(cfg, nil, nil, nil, nil, nil, nil)
 
 	// Add a panicking route to test recoverer middleware
 	router.Get("/panic-test", func(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +210,7 @@ func TestRouter_DetectionsRoute_AuthenticationAndDispatch(t *testing.T) {
 		},
 	}
 
-	router := api.NewRouter(cfg, nil, nil, mockProc)
+	router := api.NewRouter(cfg, nil, nil, mockProc, nil, nil, nil)
 
 	// 1. Missing Authorization header -> 401
 	{
@@ -293,5 +293,110 @@ func TestRouter_DetectionsRoute_AuthenticationAndDispatch(t *testing.T) {
 		if rr.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 Bad Request for invalid shape, got %d", rr.Code)
 		}
+	}
+}
+
+func TestRouter_ActuatorServoRoute_Dispatch(t *testing.T) {
+	cfg := &config.Config{
+		CORSAllowedOrigins: []string{"*"},
+	}
+
+	mockAct := &mockActuatorCommander{
+		commandServoFn: func(ctx context.Context, req service.ServoCommandRequest) (service.ServoCommandResult, error) {
+			if req.State != nil && *req.State == "OPEN" {
+				return service.ServoCommandResult{
+					Status: "dispatched",
+					State:  "OPEN",
+				}, nil
+			}
+			return service.ServoCommandResult{}, service.ErrInvalidServoPayload
+		},
+	}
+
+	router := api.NewRouter(cfg, nil, nil, nil, nil, mockAct, nil)
+
+	// Valid command
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/actuator/servo", bytes.NewBufferString(`{"state": "OPEN"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected status 200 OK, got %d. Body: %s", rr.Code, rr.Body.String())
+		}
+
+		var resp map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response JSON: %v", err)
+		}
+		if resp["status"] != "dispatched" || resp["state"] != "OPEN" {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+	}
+
+	// Invalid command
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/actuator/servo", bytes.NewBufferString(`{"state": "INVALID"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400 Bad Request, got %d", rr.Code)
+		}
+	}
+}
+
+func TestRouter_StateRoute_ConsolidatedSnapshot(t *testing.T) {
+	cfg := &config.Config{
+		CORSAllowedOrigins: []string{"*"},
+	}
+
+	mockState := &mockStateSnapshotProvider{
+		getSnapshotFn: func(ctx context.Context, mqttConnected bool) (service.StateSnapshot, error) {
+			return service.StateSnapshot{
+				SystemState: &service.SystemState{
+					ID:         1,
+					IsPaused:   false,
+					MotorState: true,
+					ServoState: false,
+				},
+				ShapeCounts: []service.ShapeCount{
+					{ShapeID: 1, ShapeName: "circle", ColorLabel: "red", LiveBuffer: 1, TotalLifetime: 5},
+				},
+				RecentAudits:  []service.AuditRecord{},
+				MQTTConnected: mqttConnected,
+			}, nil
+		},
+	}
+
+	mockBroker := &mockBrokerChecker{connected: true}
+	router := api.NewRouter(cfg, nil, nil, nil, mockState, nil, mockBroker)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp service.StateSnapshot
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response JSON: %v", err)
+	}
+
+	if !resp.MQTTConnected {
+		t.Errorf("expected MQTTConnected true, got %v", resp.MQTTConnected)
+	}
+	if resp.SystemState == nil || resp.SystemState.ID != 1 {
+		t.Errorf("expected SystemState ID 1, got %+v", resp.SystemState)
+	}
+	if len(resp.ShapeCounts) != 1 {
+		t.Errorf("expected 1 shape count, got %d", len(resp.ShapeCounts))
 	}
 }

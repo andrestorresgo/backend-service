@@ -62,12 +62,30 @@ type RolloverData struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// AuditRecord represents a recorded authentication audit log entry for the state snapshot.
+type AuditRecord struct {
+	ID        string      `json:"id"`
+	Source    AuthSource  `json:"source"`
+	UserID    *int        `json:"user_id"`
+	Status    AuditStatus `json:"status"`
+	Timestamp time.Time   `json:"timestamp"`
+}
+
+// StateSnapshot represents the consolidated system snapshot for dashboard initialization.
+type StateSnapshot struct {
+	SystemState   *SystemState  `json:"system_state"`
+	ShapeCounts   []ShapeCount  `json:"shape_counts"`
+	RecentAudits  []AuditRecord `json:"recent_audits"`
+	MQTTConnected bool          `json:"mqtt_connected"`
+}
+
 // StateRepository abstracts persistence operations for system state and counters.
 type StateRepository interface {
 	UpdateTelemetry(ctx context.Context, state SystemState, counts map[int]int, updatedAt time.Time) error
 	IncrementRollover(ctx context.Context, shapeID int, increment int, updatedAt time.Time) error
 	GetSystemState(ctx context.Context) (*SystemState, error)
 	GetShapeCounts(ctx context.Context) ([]ShapeCount, error)
+	GetRecentAudits(ctx context.Context, limit int) ([]AuditRecord, error)
 }
 
 // StateService coordinates authoritative telemetry synchronization and atomic rollover accumulation.
@@ -139,6 +157,37 @@ func (s *StateService) GetSystemState(ctx context.Context) (*SystemState, error)
 // GetShapeCounts returns all shape counters.
 func (s *StateService) GetShapeCounts(ctx context.Context) ([]ShapeCount, error) {
 	return s.repo.GetShapeCounts(ctx)
+}
+
+// GetSnapshot retrieves the consolidated system state, shape counters, and recent auth audits.
+func (s *StateService) GetSnapshot(ctx context.Context, mqttConnected bool) (StateSnapshot, error) {
+	systemState, err := s.repo.GetSystemState(ctx)
+	if err != nil {
+		return StateSnapshot{}, fmt.Errorf("failed to get system state: %w", err)
+	}
+
+	shapeCounts, err := s.repo.GetShapeCounts(ctx)
+	if err != nil {
+		return StateSnapshot{}, fmt.Errorf("failed to get shape counts: %w", err)
+	}
+	if shapeCounts == nil {
+		shapeCounts = []ShapeCount{}
+	}
+
+	recentAudits, err := s.repo.GetRecentAudits(ctx, 10)
+	if err != nil {
+		return StateSnapshot{}, fmt.Errorf("failed to get recent audits: %w", err)
+	}
+	if recentAudits == nil {
+		recentAudits = []AuditRecord{}
+	}
+
+	return StateSnapshot{
+		SystemState:   systemState,
+		ShapeCounts:   shapeCounts,
+		RecentAudits:  recentAudits,
+		MQTTConnected: mqttConnected,
+	}, nil
 }
 
 // clampBuffer ensures live buffer counts satisfy the CHECK (live_buffer >= 0 AND live_buffer <= 5) constraint.

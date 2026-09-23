@@ -71,6 +71,7 @@ func main() {
 	var telemetryWorker *mqtt.TelemetryWorker
 	var rolloverWorker *mqtt.RolloverWorker
 	var detectionService *service.DetectionService
+	var actuatorService *service.ActuatorService
 	if cfg.MQTTBrokerHost != "" {
 		var mqttErr error
 		mqttClient, mqttErr = mqtt.NewClient(cfg)
@@ -99,10 +100,11 @@ func main() {
 				}
 			}
 			detectionService = service.NewDetectionService(mqttClient, service.RealClock{})
+			actuatorService = service.NewActuatorService(mqttClient)
 		}
 	}
 
-	router := api.NewRouter(cfg, pinger, authService, detectionService)
+	router := api.NewRouter(cfg, pinger, authService, detectionService, stateService, actuatorService, mqttClient)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -126,6 +128,15 @@ func main() {
 	<-serverCtx.Done()
 	log.Println("[INFO] Shutdown signal received. Draining connections...")
 
+	// 1. Drain and stop accepting incoming HTTP requests first
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("[ERROR] Server forced to shutdown: %v", err)
+	}
+
+	// 2. Stop decoupled background MQTT workers
 	if authWorker != nil {
 		authWorker.Stop()
 		log.Println("[INFO] Auth worker stopped.")
@@ -141,15 +152,9 @@ func main() {
 		log.Println("[INFO] Rollover worker stopped.")
 	}
 
+	// 3. Flush pending MQTT outbound messages and disconnect
 	if mqttClient != nil {
 		mqttClient.Disconnect(250)
-	}
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("[ERROR] Server forced to shutdown: %v", err)
 	}
 
 	log.Println("[INFO] Server stopped gracefully.")

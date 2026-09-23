@@ -12,7 +12,15 @@ import (
 )
 
 // NewRouter constructs a chi.Mux router configured with logging, panic recovery, CORS, and API routes.
-func NewRouter(cfg *config.Config, pinger db.DBPinger, auth Authenticator, detection DetectionProcessor) *chi.Mux {
+func NewRouter(
+	cfg *config.Config,
+	pinger db.DBPinger,
+	auth Authenticator,
+	detection DetectionProcessor,
+	state StateSnapshotProvider,
+	actuator ActuatorCommander,
+	broker BrokerStatusChecker,
+) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -41,6 +49,9 @@ func NewRouter(cfg *config.Config, pinger db.DBPinger, auth Authenticator, detec
 			r.Use(BearerAuthMiddleware(cfg.VisionBearerToken))
 			r.Post("/detections", DetectionHandler(detection))
 		})
+
+		r.Post("/actuator/servo", ActuatorServoHandler(actuator))
+		r.Get("/state", StateHandler(state, broker))
 	})
 
 	// Placeholder route to verify API root

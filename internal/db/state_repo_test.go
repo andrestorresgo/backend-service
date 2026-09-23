@@ -40,4 +40,11 @@ func TestPostgresStateRepository_UninitializedPool(t *testing.T) {
 			t.Fatal("expected error with nil pool, got nil")
 		}
 	})
+
+	t.Run("GetRecentAudits with nil pool", func(t *testing.T) {
+		_, err := repo.GetRecentAudits(ctx, 10)
+		if err == nil {
+			t.Fatal("expected error with nil pool, got nil")
+		}
+	})
 }

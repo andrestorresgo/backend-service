@@ -158,3 +158,53 @@ func (r *PostgresStateRepository) GetShapeCounts(ctx context.Context) ([]service
 
 	return counts, nil
 }
+
+// GetRecentAudits queries the latest authentication audit log entries up to limit.
+func (r *PostgresStateRepository) GetRecentAudits(ctx context.Context, limit int) ([]service.AuditRecord, error) {
+	if r.pool == nil {
+		return nil, errors.New("database pool is not initialized")
+	}
+
+	if limit <= 0 {
+		limit = 10
+	}
+
+	query := `
+		SELECT id, source, user_id, status, timestamp
+		FROM auth_audit_logs
+		ORDER BY timestamp DESC, id DESC
+		LIMIT $1
+	`
+	rows, err := r.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query auth_audit_logs: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]service.AuditRecord, 0)
+	for rows.Next() {
+		var rec service.AuditRecord
+		var id string
+		var source string
+		var status string
+		if err := rows.Scan(
+			&id,
+			&source,
+			&rec.UserID,
+			&status,
+			&rec.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan auth_audit_log row: %w", err)
+		}
+		rec.ID = id
+		rec.Source = service.AuthSource(source)
+		rec.Status = service.AuditStatus(status)
+		records = append(records, rec)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return records, nil
+}
