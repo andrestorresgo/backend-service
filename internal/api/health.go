@@ -43,7 +43,7 @@ func isNil(i any) bool {
 }
 
 // HealthHandler returns an HTTP handler for the /healthz liveness and readiness probe.
-func HealthHandler(pinger db.DBPinger) http.HandlerFunc {
+func HealthHandler(pinger db.DBPinger, broker BrokerStatusChecker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status := "ok"
 		dbStatus := DatabaseStatus{Status: "connected"}
@@ -52,7 +52,6 @@ func HealthHandler(pinger db.DBPinger) http.HandlerFunc {
 			status = "degraded"
 			dbStatus = DatabaseStatus{Status: "not_configured"}
 		} else {
-
 			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 			defer cancel()
 
@@ -65,11 +64,18 @@ func HealthHandler(pinger db.DBPinger) http.HandlerFunc {
 			}
 		}
 
+		mqttStatus := MQTTStatus{Status: "disconnected"}
+		if !isNil(broker) && broker.IsConnected() {
+			mqttStatus = MQTTStatus{Status: "connected"}
+		} else if isNil(broker) {
+			mqttStatus = MQTTStatus{Status: "not_configured"}
+		}
+
 		resp := HealthResponse{
 			Status:   status,
 			Service:  "backend-service",
 			Database: dbStatus,
-			MQTT:     MQTTStatus{Status: "disconnected"},
+			MQTT:     mqttStatus,
 		}
 
 		w.Header().Set("Content-Type", "application/json")

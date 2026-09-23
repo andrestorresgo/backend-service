@@ -400,3 +400,31 @@ func TestRouter_StateRoute_ConsolidatedSnapshot(t *testing.T) {
 		t.Errorf("expected 1 shape count, got %d", len(resp.ShapeCounts))
 	}
 }
+
+func TestHealthCheck_MQTTConnected(t *testing.T) {
+	cfg := &config.Config{
+		CORSAllowedOrigins: []string{"*"},
+	}
+	pinger := &mockDBPinger{pingErr: nil}
+	mockBroker := &mockBrokerChecker{connected: true}
+	router := api.NewRouter(cfg, pinger, nil, nil, nil, nil, mockBroker)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %d", rr.Code)
+	}
+
+	var resp api.HealthResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.MQTT.Status != "connected" {
+		t.Errorf("expected mqtt status 'connected', got '%s'", resp.MQTT.Status)
+	}
+}
+

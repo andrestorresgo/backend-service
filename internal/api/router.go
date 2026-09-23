@@ -38,7 +38,7 @@ func NewRouter(
 	}
 	r.Use(cors.Handler(corsOptions))
 
-	r.Get("/healthz", HealthHandler(pinger))
+	r.Get("/healthz", HealthHandler(pinger, broker))
 
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
