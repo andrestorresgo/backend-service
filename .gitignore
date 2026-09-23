@@ -1,0 +1,13 @@
+# Binaries
+bin/
+dist/
+/server
+
+# Environment variables
+.env
+.env.local
+*.env
+
+# Operating System Files
+.DS_Store
+Thumbs.db
