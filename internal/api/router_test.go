@@ -25,7 +25,7 @@ func TestHealthCheck_Connected(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	pinger := &mockDBPinger{pingErr: nil}
-	router := api.NewRouter(cfg, pinger)
+	router := api.NewRouter(cfg, pinger, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -57,7 +57,7 @@ func TestHealthCheck_DegradedWhenDBFails(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	pinger := &mockDBPinger{pingErr: errors.New("connection refused")}
-	router := api.NewRouter(cfg, pinger)
+	router := api.NewRouter(cfg, pinger, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -88,7 +88,7 @@ func TestHealthCheck_NilPinger(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"*"},
 	}
-	router := api.NewRouter(cfg, nil)
+	router := api.NewRouter(cfg, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -117,7 +117,7 @@ func TestHealthCheck_TypedNilPinger(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	var typedNil *mockDBPinger = nil
-	router := api.NewRouter(cfg, typedNil)
+	router := api.NewRouter(cfg, typedNil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -146,7 +146,7 @@ func TestCORSHeaders(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"https://dashboard.example.com"},
 	}
-	router := api.NewRouter(cfg, nil)
+	router := api.NewRouter(cfg, nil, nil)
 
 	req := httptest.NewRequest(http.MethodOptions, "/healthz", nil)
 	req.Header.Set("Origin", "https://dashboard.example.com")
@@ -165,7 +165,7 @@ func TestPanicRecovery(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"*"},
 	}
-	router := api.NewRouter(cfg, nil)
+	router := api.NewRouter(cfg, nil, nil)
 
 	// Add a panicking route to test recoverer middleware
 	router.Get("/panic-test", func(w http.ResponseWriter, r *http.Request) {

@@ -15,6 +15,8 @@ import (
 	"github.com/andrestorresgo/backend-service/internal/api"
 	"github.com/andrestorresgo/backend-service/internal/config"
 	"github.com/andrestorresgo/backend-service/internal/db"
+	"github.com/andrestorresgo/backend-service/internal/mqtt"
+	"github.com/andrestorresgo/backend-service/internal/service"
 )
 
 func main() {
@@ -53,13 +55,34 @@ func main() {
 	}
 
 	var pinger db.DBPinger
+	var authService *service.AuthService
 	if pool != nil {
 		pinger = pool
+		authRepo := db.NewPostgresAuthRepository(pool)
+		authService = service.NewAuthService(authRepo, service.RealClock{})
 	}
-	router := api.NewRouter(cfg, pinger)
+
+	// Initialize MQTT client and workers if broker host is configured
+	var mqttClient *mqtt.Client
+	var authWorker *mqtt.AuthWorker
+	if cfg.MQTTBrokerHost != "" && authService != nil {
+		var mqttErr error
+		mqttClient, mqttErr = mqtt.NewClient(cfg)
+		if mqttErr != nil {
+			log.Printf("[WARN] Failed to connect to MQTT broker (%s:%d): %v. Running in degraded state.",
+				cfg.MQTTBrokerHost, cfg.MQTTBrokerPort, mqttErr)
+		} else {
+			authWorker = mqtt.NewAuthWorker(authService, mqttClient, 100)
+			authWorker.Start()
+			if err := mqttClient.SubscribeAuthRequest(authWorker); err != nil {
+				log.Printf("[ERROR] Failed to subscribe auth worker to MQTT: %v", err)
+			}
+		}
+	}
+
+	router := api.NewRouter(cfg, pinger, authService)
 
 	srv := &http.Server{
-
 		Addr:         ":" + cfg.Port,
 		Handler:      router,
 		ReadTimeout:  10 * time.Second,
@@ -80,6 +103,15 @@ func main() {
 
 	<-serverCtx.Done()
 	log.Println("[INFO] Shutdown signal received. Draining connections...")
+
+	if authWorker != nil {
+		authWorker.Stop()
+		log.Println("[INFO] Auth worker stopped.")
+	}
+
+	if mqttClient != nil {
+		mqttClient.Disconnect(250)
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
