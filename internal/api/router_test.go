@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/andrestorresgo/backend-service/internal/api"
 	"github.com/andrestorresgo/backend-service/internal/config"
+	"github.com/andrestorresgo/backend-service/internal/service"
 )
 
 type mockDBPinger struct {
@@ -25,7 +27,7 @@ func TestHealthCheck_Connected(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	pinger := &mockDBPinger{pingErr: nil}
-	router := api.NewRouter(cfg, pinger, nil)
+	router := api.NewRouter(cfg, pinger, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -57,7 +59,7 @@ func TestHealthCheck_DegradedWhenDBFails(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	pinger := &mockDBPinger{pingErr: errors.New("connection refused")}
-	router := api.NewRouter(cfg, pinger, nil)
+	router := api.NewRouter(cfg, pinger, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -88,7 +90,7 @@ func TestHealthCheck_NilPinger(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"*"},
 	}
-	router := api.NewRouter(cfg, nil, nil)
+	router := api.NewRouter(cfg, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -117,7 +119,7 @@ func TestHealthCheck_TypedNilPinger(t *testing.T) {
 		CORSAllowedOrigins: []string{"*"},
 	}
 	var typedNil *mockDBPinger = nil
-	router := api.NewRouter(cfg, typedNil, nil)
+	router := api.NewRouter(cfg, typedNil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr := httptest.NewRecorder()
@@ -141,12 +143,11 @@ func TestHealthCheck_TypedNilPinger(t *testing.T) {
 	}
 }
 
-
 func TestCORSHeaders(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"https://dashboard.example.com"},
 	}
-	router := api.NewRouter(cfg, nil, nil)
+	router := api.NewRouter(cfg, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodOptions, "/healthz", nil)
 	req.Header.Set("Origin", "https://dashboard.example.com")
@@ -165,7 +166,7 @@ func TestPanicRecovery(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"*"},
 	}
-	router := api.NewRouter(cfg, nil, nil)
+	router := api.NewRouter(cfg, nil, nil, nil)
 
 	// Add a panicking route to test recoverer middleware
 	router.Get("/panic-test", func(w http.ResponseWriter, r *http.Request) {
@@ -183,3 +184,114 @@ func TestPanicRecovery(t *testing.T) {
 	}
 }
 
+func TestRouter_DetectionsRoute_AuthenticationAndDispatch(t *testing.T) {
+	cfg := &config.Config{
+		VisionBearerToken:  "valid-vision-secret-123",
+		CORSAllowedOrigins: []string{"*"},
+	}
+
+	mockProc := &mockDetectionProcessor{
+		processFn: func(ctx context.Context, req service.DetectionRequest) (service.DetectionResult, error) {
+			if req.ShapeID == 1 || req.ShapeName == "circle" {
+				return service.DetectionResult{
+					Status:      service.DetectionStatusDispatched,
+					ShapeID:     1,
+					DetectionID: 101,
+				}, nil
+			}
+			if req.ShapeID == 2 {
+				return service.DetectionResult{
+					Status:  service.DetectionStatusDebounced,
+					ShapeID: 2,
+					Message: "Duplicate detection dropped within 2s debounce window",
+				}, nil
+			}
+			return service.DetectionResult{}, service.ErrInvalidShape
+		},
+	}
+
+	router := api.NewRouter(cfg, nil, nil, mockProc)
+
+	// 1. Missing Authorization header -> 401
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/detections", bytes.NewReader([]byte(`{"shape_id": 1}`)))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 Unauthorized for missing auth header, got %d", rr.Code)
+		}
+	}
+
+	// 2. Incorrect Bearer token -> 401
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/detections", bytes.NewReader([]byte(`{"shape_id": 1}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer wrong-token")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 Unauthorized for wrong token, got %d", rr.Code)
+		}
+	}
+
+	// 3. Valid token and dispatched -> 200 OK
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/detections", bytes.NewReader([]byte(`{"shape_name": "circle"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer valid-vision-secret-123")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d. Body: %s", rr.Code, rr.Body.String())
+		}
+
+		var resp map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["status"] != "dispatched" || resp["shape_id"] != float64(1) || resp["detection_id"] != float64(101) {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+	}
+
+	// 4. Valid token and debounced -> 200 OK
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/detections", bytes.NewReader([]byte(`{"shape_id": 2}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer valid-vision-secret-123")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d. Body: %s", rr.Code, rr.Body.String())
+		}
+
+		var resp map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["status"] != "debounced" || resp["shape_id"] != float64(2) {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+		if resp["message"] != "Duplicate detection dropped within 2s debounce window" {
+			t.Errorf("unexpected message: %v", resp["message"])
+		}
+	}
+
+	// 5. Valid token, invalid shape -> 400 Bad Request
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/detections", bytes.NewReader([]byte(`{"shape_id": 99}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer valid-vision-secret-123")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for invalid shape, got %d", rr.Code)
+		}
+	}
+}

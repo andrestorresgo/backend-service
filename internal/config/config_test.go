@@ -119,5 +119,3 @@ func TestLoad(t *testing.T) {
 		t.Error("expected non-empty Port")
 	}
 }
-
-

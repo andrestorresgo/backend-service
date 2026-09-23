@@ -11,8 +11,8 @@ import (
 	"github.com/andrestorresgo/backend-service/internal/db"
 )
 
-// NewRouter constructs a chi.Mux router configured with logging, panic recovery, CORS, and health routes.
-func NewRouter(cfg *config.Config, pinger db.DBPinger, auth Authenticator) *chi.Mux {
+// NewRouter constructs a chi.Mux router configured with logging, panic recovery, CORS, and API routes.
+func NewRouter(cfg *config.Config, pinger db.DBPinger, auth Authenticator, detection DetectionProcessor) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -35,6 +35,12 @@ func NewRouter(cfg *config.Config, pinger db.DBPinger, auth Authenticator) *chi.
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/login", AuthLoginHandler(auth))
+
+		// Protected external vision ingestion webhook
+		r.Group(func(r chi.Router) {
+			r.Use(BearerAuthMiddleware(cfg.VisionBearerToken))
+			r.Post("/detections", DetectionHandler(detection))
+		})
 	})
 
 	// Placeholder route to verify API root

@@ -29,7 +29,7 @@ func setupAuthTestRouter(auth api.Authenticator) *httptest.Server {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"*"},
 	}
-	router := api.NewRouter(cfg, nil, auth)
+	router := api.NewRouter(cfg, nil, auth, nil)
 	return httptest.NewServer(router)
 }
 

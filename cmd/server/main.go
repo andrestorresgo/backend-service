@@ -65,22 +65,26 @@ func main() {
 	// Initialize MQTT client and workers if broker host is configured
 	var mqttClient *mqtt.Client
 	var authWorker *mqtt.AuthWorker
-	if cfg.MQTTBrokerHost != "" && authService != nil {
+	var detectionService *service.DetectionService
+	if cfg.MQTTBrokerHost != "" {
 		var mqttErr error
 		mqttClient, mqttErr = mqtt.NewClient(cfg)
 		if mqttErr != nil {
 			log.Printf("[WARN] Failed to connect to MQTT broker (%s:%d): %v. Running in degraded state.",
 				cfg.MQTTBrokerHost, cfg.MQTTBrokerPort, mqttErr)
 		} else {
-			authWorker = mqtt.NewAuthWorker(authService, mqttClient, 100)
-			authWorker.Start()
-			if err := mqttClient.SubscribeAuthRequest(authWorker); err != nil {
-				log.Printf("[ERROR] Failed to subscribe auth worker to MQTT: %v", err)
+			if authService != nil {
+				authWorker = mqtt.NewAuthWorker(authService, mqttClient, 100)
+				authWorker.Start()
+				if err := mqttClient.SubscribeAuthRequest(authWorker); err != nil {
+					log.Printf("[ERROR] Failed to subscribe auth worker to MQTT: %v", err)
+				}
 			}
+			detectionService = service.NewDetectionService(mqttClient, service.RealClock{})
 		}
 	}
 
-	router := api.NewRouter(cfg, pinger, authService)
+	router := api.NewRouter(cfg, pinger, authService, detectionService)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
