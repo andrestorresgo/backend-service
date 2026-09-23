@@ -168,3 +168,49 @@ func TestDetectionHandler_InternalError(t *testing.T) {
 		t.Fatalf("expected status 500 Internal Server Error, got %d", rr.Code)
 	}
 }
+
+func TestDetectionHandler_XEventIDHeader(t *testing.T) {
+	var capturedReq service.DetectionRequest
+	mockProc := &mockDetectionProcessor{
+		processFn: func(ctx context.Context, req service.DetectionRequest) (service.DetectionResult, error) {
+			capturedReq = req
+			return service.DetectionResult{
+				OK:          true,
+				Status:      service.DetectionStatusDispatched,
+				ShapeID:     1,
+				DetectionID: 10,
+			}, nil
+		},
+	}
+	handler := api.DetectionHandler(mockProc)
+
+	body := []byte(`{"shape": "circulo", "confidence": 0.8462, "timestamp": "2026-09-23T21:20:15.400000+00:00"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/detections", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Event-ID", "5f805d17-5373-49a8-97a7-4ed6bb7740c0")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %d", rr.Code)
+	}
+	if capturedReq.EventID != "5f805d17-5373-49a8-97a7-4ed6bb7740c0" {
+		t.Errorf("expected EventID '5f805d17-5373-49a8-97a7-4ed6bb7740c0', got '%s'", capturedReq.EventID)
+	}
+	if capturedReq.Shape != "circulo" {
+		t.Errorf("expected Shape 'circulo', got '%v'", capturedReq.Shape)
+	}
+	if capturedReq.Confidence != 0.8462 {
+		t.Errorf("expected Confidence 0.8462, got %v", capturedReq.Confidence)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["ok"] != true {
+		t.Errorf("expected ok: true, got %v", resp["ok"])
+	}
+}
+

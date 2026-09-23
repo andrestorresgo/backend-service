@@ -54,6 +54,12 @@ func NewRouter(
 		r.Get("/state", StateHandler(state, broker))
 	})
 
+	// Compatibility route for external vision service webhook contract
+	r.Group(func(r chi.Router) {
+		r.Use(BearerAuthMiddleware(cfg.VisionBearerToken))
+		r.Post("/api/vision/detection", DetectionHandler(detection))
+	})
+
 	// Placeholder route to verify API root
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

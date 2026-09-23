@@ -137,6 +137,36 @@ func TestResolveShape(t *testing.T) {
 			expectedName: service.ShapeNameTriangle,
 		},
 		{
+			name:         "Spanish circulo",
+			req:          service.DetectionRequest{Shape: "circulo"},
+			expectedID:   service.ShapeCircle,
+			expectedName: service.ShapeNameCircle,
+		},
+		{
+			name:         "Spanish círculo with accent",
+			req:          service.DetectionRequest{Shape: "círculo"},
+			expectedID:   service.ShapeCircle,
+			expectedName: service.ShapeNameCircle,
+		},
+		{
+			name:         "Spanish triangulo",
+			req:          service.DetectionRequest{Shape: "triangulo"},
+			expectedID:   service.ShapeTriangle,
+			expectedName: service.ShapeNameTriangle,
+		},
+		{
+			name:         "Spanish triángulo with accent",
+			req:          service.DetectionRequest{Shape: "triángulo"},
+			expectedID:   service.ShapeTriangle,
+			expectedName: service.ShapeNameTriangle,
+		},
+		{
+			name:         "Spanish cuadrado",
+			req:          service.DetectionRequest{Shape: "cuadrado"},
+			expectedID:   service.ShapeSquare,
+			expectedName: service.ShapeNameSquare,
+		},
+		{
 			name:         "Shape field float64 from JSON",
 			req:          service.DetectionRequest{Shape: float64(3)},
 			expectedID:   service.ShapeSquare,
@@ -307,3 +337,65 @@ func TestDetectionService_PublisherError(t *testing.T) {
 		t.Fatal("expected error when publisher fails, got nil")
 	}
 }
+
+func TestDetectionService_EventIDDeduplication(t *testing.T) {
+	ctx := context.Background()
+	clock := newMockClock(time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC))
+	pub := &mockPublisher{}
+	svc := service.NewDetectionService(pub, clock)
+
+	// 1. Initial detection with EventID
+	res1, err := svc.ProcessDetection(ctx, service.DetectionRequest{
+		EventID: "evt-uuid-1",
+		Shape:   "circulo",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res1.Status != service.DetectionStatusDispatched {
+		t.Fatalf("expected dispatched, got %s", res1.Status)
+	}
+	if !res1.OK {
+		t.Errorf("expected OK to be true")
+	}
+	if len(pub.getMessages()) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(pub.getMessages()))
+	}
+
+	// 2. Advance time beyond 2s debounce window (e.g., 5 seconds later, simulating delayed retry)
+	clock.Advance(5 * time.Second)
+
+	// 3. Retry with SAME EventID -> must be debounced despite > 2s
+	resRetry, err := svc.ProcessDetection(ctx, service.DetectionRequest{
+		EventID: "evt-uuid-1",
+		Shape:   "circulo",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on retry: %v", err)
+	}
+	if resRetry.Status != service.DetectionStatusDebounced {
+		t.Fatalf("expected status 'debounced' for duplicate EventID, got '%s'", resRetry.Status)
+	}
+	if !resRetry.OK {
+		t.Errorf("expected OK to be true on debounced retry")
+	}
+	if len(pub.getMessages()) != 1 {
+		t.Fatalf("expected no new published message on retry, still 1, got %d", len(pub.getMessages()))
+	}
+
+	// 4. New EventID after retry -> Dispatched
+	resNew, err := svc.ProcessDetection(ctx, service.DetectionRequest{
+		EventID: "evt-uuid-2",
+		Shape:   "circulo",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on new event: %v", err)
+	}
+	if resNew.Status != service.DetectionStatusDispatched {
+		t.Fatalf("expected dispatched for new EventID, got %s", resNew.Status)
+	}
+	if len(pub.getMessages()) != 2 {
+		t.Fatalf("expected 2 published messages, got %d", len(pub.getMessages()))
+	}
+}
+

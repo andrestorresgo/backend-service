@@ -32,6 +32,10 @@ func DetectionHandler(processor DetectionProcessor) http.HandlerFunc {
 			return
 		}
 
+		if req.EventID == "" {
+			req.EventID = r.Header.Get("X-Event-ID")
+		}
+
 		result, err := processor.ProcessDetection(r.Context(), req)
 		if err != nil {
 			if errors.Is(err, service.ErrInvalidShape) || errors.Is(err, service.ErrConflictingShape) {
@@ -44,6 +48,10 @@ func DetectionHandler(processor DetectionProcessor) http.HandlerFunc {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":"failed to process detection"}`))
 			return
+		}
+
+		if !result.OK && (result.Status == service.DetectionStatusDispatched || result.Status == service.DetectionStatusDebounced) {
+			result.OK = true
 		}
 
 		w.WriteHeader(http.StatusOK)

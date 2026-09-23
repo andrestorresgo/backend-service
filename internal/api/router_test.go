@@ -192,7 +192,7 @@ func TestRouter_DetectionsRoute_AuthenticationAndDispatch(t *testing.T) {
 
 	mockProc := &mockDetectionProcessor{
 		processFn: func(ctx context.Context, req service.DetectionRequest) (service.DetectionResult, error) {
-			if req.ShapeID == 1 || req.ShapeName == "circle" {
+			if req.ShapeID == 1 || req.ShapeName == "circle" || req.Shape == "circulo" {
 				return service.DetectionResult{
 					Status:      service.DetectionStatusDispatched,
 					ShapeID:     1,
@@ -292,6 +292,31 @@ func TestRouter_DetectionsRoute_AuthenticationAndDispatch(t *testing.T) {
 
 		if rr.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 Bad Request for invalid shape, got %d", rr.Code)
+		}
+	}
+
+	// 6. Route alias /api/vision/detection with valid token, X-Event-ID, and Spanish shape -> 200 OK
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/vision/detection", bytes.NewReader([]byte(`{"shape":"circulo","confidence":0.85,"timestamp":"2026-09-23T21:20:15Z"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Event-ID", "5f805d17-5373-49a8-97a7-4ed6bb7740c0")
+		req.Header.Set("Authorization", "Bearer valid-vision-secret-123")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on /api/vision/detection, got %d. Body: %s", rr.Code, rr.Body.String())
+		}
+
+		var resp map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["ok"] != true {
+			t.Errorf("expected ok: true, got %v", resp["ok"])
+		}
+		if resp["status"] != "dispatched" {
+			t.Errorf("expected status 'dispatched', got %v", resp["status"])
 		}
 	}
 }

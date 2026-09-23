@@ -40,15 +40,23 @@ const (
 	DetectionStatusDebounced  DetectionResultStatus = "debounced"
 )
 
+const (
+	EventRetentionDuration = 5 * time.Minute
+)
+
 // DetectionRequest models incoming computer vision webhook payloads.
 type DetectionRequest struct {
-	ShapeID   int    `json:"shape_id"`
-	ShapeName string `json:"shape_name"`
-	Shape     any    `json:"shape"`
+	EventID    string  `json:"event_id,omitempty"`
+	ShapeID    int     `json:"shape_id"`
+	ShapeName  string  `json:"shape_name"`
+	Shape      any     `json:"shape"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Timestamp  string  `json:"timestamp,omitempty"`
 }
 
 // DetectionResult represents the API response.
 type DetectionResult struct {
+	OK          bool                  `json:"ok"`
 	Status      DetectionResultStatus `json:"status"`
 	ShapeID     int                   `json:"shape_id"`
 	DetectionID int                   `json:"detection_id,omitempty"`
@@ -62,11 +70,12 @@ type DetectionPublisher interface {
 
 // DetectionService manages shape resolution, debounce filtering, and MQTT dispatching.
 type DetectionService struct {
-	publisher   DetectionPublisher
-	clock       Clock
-	lastSeenMu  sync.Mutex
-	lastSeen    map[uint8]time.Time
-	detectionID atomic.Uint32
+	publisher    DetectionPublisher
+	clock        Clock
+	mu           sync.Mutex
+	lastSeen     map[uint8]time.Time
+	recentEvents map[string]time.Time
+	detectionID  atomic.Uint32
 }
 
 // NewDetectionService constructs a new DetectionService instance.
@@ -75,9 +84,10 @@ func NewDetectionService(pub DetectionPublisher, clock Clock) *DetectionService 
 		clock = RealClock{}
 	}
 	return &DetectionService{
-		publisher: pub,
-		clock:     clock,
-		lastSeen:  make(map[uint8]time.Time),
+		publisher:    pub,
+		clock:        clock,
+		lastSeen:     make(map[uint8]time.Time),
+		recentEvents: make(map[string]time.Time),
 	}
 }
 
@@ -145,11 +155,11 @@ func ResolveShape(req DetectionRequest) (uint8, string, error) {
 func parseShapeString(raw string) (uint8, string, error) {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
 	switch trimmed {
-	case "circle", "red":
+	case "circle", "red", "circulo", "círculo":
 		return ShapeCircle, ShapeNameCircle, nil
-	case "triangle", "green":
+	case "triangle", "green", "triangulo", "triángulo":
 		return ShapeTriangle, ShapeNameTriangle, nil
-	case "square", "blue":
+	case "square", "blue", "cuadrado":
 		return ShapeSquare, ShapeNameSquare, nil
 	default:
 		// Attempt numeric string parsing
@@ -176,11 +186,34 @@ func (s *DetectionService) ProcessDetection(ctx context.Context, req DetectionRe
 
 	now := s.clock.Now()
 
-	s.lastSeenMu.Lock()
+	s.mu.Lock()
+	// 1. Check EventID deduplication if provided (e.g. X-Event-ID header or event_id field)
+	if req.EventID != "" {
+		if seenAt, exists := s.recentEvents[req.EventID]; exists && now.Sub(seenAt) < EventRetentionDuration {
+			s.mu.Unlock()
+			return DetectionResult{
+				OK:      true,
+				Status:  DetectionStatusDebounced,
+				ShapeID: int(shapeID),
+				Message: "Duplicate event ID dropped",
+			}, nil
+		}
+		s.recentEvents[req.EventID] = now
+		if len(s.recentEvents) > 512 {
+			for id, t := range s.recentEvents {
+				if now.Sub(t) >= EventRetentionDuration {
+					delete(s.recentEvents, id)
+				}
+			}
+		}
+	}
+
+	// 2. Check 2s debounce window per shape
 	lastTime, exists := s.lastSeen[shapeID]
 	if exists && now.Sub(lastTime) < DebounceDuration {
-		s.lastSeenMu.Unlock()
+		s.mu.Unlock()
 		return DetectionResult{
+			OK:      true,
 			Status:  DetectionStatusDebounced,
 			ShapeID: int(shapeID),
 			Message: "Duplicate detection dropped within 2s debounce window",
@@ -189,7 +222,7 @@ func (s *DetectionService) ProcessDetection(ctx context.Context, req DetectionRe
 
 	// Record valid detection timestamp
 	s.lastSeen[shapeID] = now
-	s.lastSeenMu.Unlock()
+	s.mu.Unlock()
 
 	if s.publisher == nil {
 		return DetectionResult{}, ErrPublisherUnavailable
@@ -213,6 +246,7 @@ func (s *DetectionService) ProcessDetection(ctx context.Context, req DetectionRe
 	}
 
 	return DetectionResult{
+		OK:          true,
 		Status:      DetectionStatusDispatched,
 		ShapeID:     int(shapeID),
 		DetectionID: detID,
