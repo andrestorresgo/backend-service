@@ -60,12 +60,13 @@ func main() {
 
 	// 2. Verify System State
 	var id int
-	var isPaused, motorState, servoState bool
+	var isPaused, servoState bool
+	var motorState string
 	if err := pool.QueryRow(ctx, "SELECT id, is_paused, motor_state, servo_state FROM system_state WHERE id = 1").
 		Scan(&id, &isPaused, &motorState, &servoState); err != nil {
 		log.Fatalf("[ERROR] Failed to query system_state table: %v", err)
 	}
-	fmt.Printf("✓ Table 'system_state': singleton row present (is_paused=%v, motor_state=%v, servo_state=%v)\n",
+	fmt.Printf("✓ Table 'system_state': singleton row present (is_paused=%v, motor_state=%s, servo_state=%v)\n",
 		isPaused, motorState, servoState)
 
 	// 3. Verify Shape Counts

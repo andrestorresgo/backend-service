@@ -15,6 +15,7 @@ import (
 
 type mockActuatorCommander struct {
 	commandServoFn func(ctx context.Context, req service.ServoCommandRequest) (service.ServoCommandResult, error)
+	commandMotorFn func(ctx context.Context, req service.MotorCommandRequest) (service.MotorCommandResult, error)
 }
 
 func (m *mockActuatorCommander) CommandServo(ctx context.Context, req service.ServoCommandRequest) (service.ServoCommandResult, error) {
@@ -23,6 +24,14 @@ func (m *mockActuatorCommander) CommandServo(ctx context.Context, req service.Se
 	}
 	return service.ServoCommandResult{}, errors.New("not implemented")
 }
+
+func (m *mockActuatorCommander) CommandMotor(ctx context.Context, req service.MotorCommandRequest) (service.MotorCommandResult, error) {
+	if m.commandMotorFn != nil {
+		return m.commandMotorFn(ctx, req)
+	}
+	return service.MotorCommandResult{}, errors.New("not implemented")
+}
+
 
 func TestActuatorServoHandler(t *testing.T) {
 	tests := []struct {
@@ -130,3 +139,97 @@ func TestActuatorServoHandler(t *testing.T) {
 		})
 	}
 }
+
+func TestActuatorMotorHandler(t *testing.T) {
+	tests := []struct {
+		name                string
+		commander           api.ActuatorCommander
+		payload             string
+		expectedStatus      int
+		expectedState       string
+		expectedStatusField string
+	}{
+		{
+			name: "200 OK on state ON",
+			commander: &mockActuatorCommander{
+				commandMotorFn: func(ctx context.Context, req service.MotorCommandRequest) (service.MotorCommandResult, error) {
+					return service.MotorCommandResult{Status: "dispatched", State: "ON"}, nil
+				},
+			},
+			payload:             `{"state": "ON"}`,
+			expectedStatus:      http.StatusOK,
+			expectedState:       "ON",
+			expectedStatusField: "dispatched",
+		},
+		{
+			name: "200 OK on state MEDIUM",
+			commander: &mockActuatorCommander{
+				commandMotorFn: func(ctx context.Context, req service.MotorCommandRequest) (service.MotorCommandResult, error) {
+					return service.MotorCommandResult{Status: "dispatched", State: "MEDIUM"}, nil
+				},
+			},
+			payload:             `{"state": "MEDIUM"}`,
+			expectedStatus:      http.StatusOK,
+			expectedState:       "MEDIUM",
+			expectedStatusField: "dispatched",
+		},
+		{
+			name: "200 OK on state OFF",
+			commander: &mockActuatorCommander{
+				commandMotorFn: func(ctx context.Context, req service.MotorCommandRequest) (service.MotorCommandResult, error) {
+					return service.MotorCommandResult{Status: "dispatched", State: "OFF"}, nil
+				},
+			},
+			payload:             `{"state": "OFF"}`,
+			expectedStatus:      http.StatusOK,
+			expectedState:       "OFF",
+			expectedStatusField: "dispatched",
+		},
+		{
+			name: "400 Bad Request on invalid state string",
+			commander: &mockActuatorCommander{
+				commandMotorFn: func(ctx context.Context, req service.MotorCommandRequest) (service.MotorCommandResult, error) {
+					return service.MotorCommandResult{}, service.ErrInvalidMotorPayload
+				},
+			},
+			payload:        `{"state": "ULTRA"}`,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "503 Service Unavailable when commander is nil",
+			commander:      nil,
+			payload:        `{"state": "ON"}`,
+			expectedStatus: http.StatusServiceUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := api.ActuatorMotorHandler(tt.commander)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/actuator/motor", bytes.NewBufferString(tt.payload))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tt.expectedStatus {
+				t.Fatalf("status got %d, want %d. Body: %s", rr.Code, tt.expectedStatus, rr.Body.String())
+			}
+
+			if tt.expectedStatus == http.StatusOK {
+				var resp service.MotorCommandResult
+				if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if resp.Status != tt.expectedStatusField {
+					t.Errorf("status field got '%s', want '%s'", resp.Status, tt.expectedStatusField)
+				}
+				if resp.State != tt.expectedState {
+					t.Errorf("state field got '%s', want '%s'", resp.State, tt.expectedState)
+				}
+			}
+		})
+	}
+}
+

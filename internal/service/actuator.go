@@ -12,11 +12,18 @@ const (
 	ServoStateOpen   = "OPEN"
 	ServoStateClosed = "CLOSED"
 	TopicActuatorServo = "factory/actuator/servo"
+
+	MotorStateOff    = "OFF"
+	MotorStateMedium = "MEDIUM"
+	MotorStateOn     = "ON"
+	TopicActuatorMotor = "factory/actuator/motor"
 )
 
 var (
 	// ErrInvalidServoPayload indicates a malformed or missing servo control command.
 	ErrInvalidServoPayload = errors.New("invalid servo payload; state must be OPEN or CLOSED, or open must be boolean")
+	// ErrInvalidMotorPayload indicates a malformed or missing motor control command.
+	ErrInvalidMotorPayload = errors.New("invalid motor payload; state must be ON, MEDIUM, or OFF")
 	// ErrActuatorPublisherUnavailable indicates no MQTT publisher is configured or connected.
 	ErrActuatorPublisherUnavailable = errors.New("actuator publisher unavailable")
 )
@@ -32,6 +39,19 @@ type ServoCommandResult struct {
 	Status string `json:"status"`
 	State  string `json:"state"`
 }
+
+// MotorCommandRequest models the incoming request to control the physical DC motor speed.
+type MotorCommandRequest struct {
+	State *string `json:"state,omitempty"`
+	Speed *string `json:"speed,omitempty"`
+}
+
+// MotorCommandResult models the response returned upon successful command dispatch.
+type MotorCommandResult struct {
+	Status string `json:"status"`
+	State  string `json:"state"`
+}
+
 
 // ActuatorPublisher abstracts MQTT message publication for actuator commands.
 type ActuatorPublisher interface {
@@ -84,3 +104,41 @@ func (s *ActuatorService) CommandServo(ctx context.Context, req ServoCommandRequ
 		State:  targetState,
 	}, nil
 }
+
+// CommandMotor validates the requested motor speed state and dispatches the instruction to HiveMQ.
+func (s *ActuatorService) CommandMotor(ctx context.Context, req MotorCommandRequest) (MotorCommandResult, error) {
+	var targetState string
+
+	if req.State != nil {
+		normalized := strings.ToUpper(strings.TrimSpace(*req.State))
+		if normalized == MotorStateOn || normalized == MotorStateMedium || normalized == MotorStateOff {
+			targetState = normalized
+		} else {
+			return MotorCommandResult{}, ErrInvalidMotorPayload
+		}
+	} else if req.Speed != nil {
+		normalized := strings.ToUpper(strings.TrimSpace(*req.Speed))
+		if normalized == MotorStateOn || normalized == MotorStateMedium || normalized == MotorStateOff {
+			targetState = normalized
+		} else {
+			return MotorCommandResult{}, ErrInvalidMotorPayload
+		}
+	} else {
+		return MotorCommandResult{}, ErrInvalidMotorPayload
+	}
+
+	if s.publisher == nil {
+		return MotorCommandResult{}, ErrActuatorPublisherUnavailable
+	}
+
+	payload := fmt.Sprintf(`{"state":"%s"}`, targetState)
+	if err := s.publisher.Publish(TopicActuatorMotor, 1, false, []byte(payload)); err != nil {
+		return MotorCommandResult{}, fmt.Errorf("failed to publish motor command to MQTT: %w", err)
+	}
+
+	return MotorCommandResult{
+		Status: "dispatched",
+		State:  targetState,
+	}, nil
+}
+

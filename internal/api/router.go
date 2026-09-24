@@ -51,6 +51,7 @@ func NewRouter(
 		})
 
 		r.Post("/actuator/servo", ActuatorServoHandler(actuator))
+		r.Post("/actuator/motor", ActuatorMotorHandler(actuator))
 		r.Get("/state", StateHandler(state, broker))
 	})
 

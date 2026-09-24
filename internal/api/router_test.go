@@ -375,6 +375,61 @@ func TestRouter_ActuatorServoRoute_Dispatch(t *testing.T) {
 	}
 }
 
+func TestRouter_ActuatorMotorRoute_Dispatch(t *testing.T) {
+	cfg := &config.Config{
+		CORSAllowedOrigins: []string{"*"},
+	}
+
+	mockAct := &mockActuatorCommander{
+		commandMotorFn: func(ctx context.Context, req service.MotorCommandRequest) (service.MotorCommandResult, error) {
+			if req.State != nil && (*req.State == "ON" || *req.State == "MEDIUM" || *req.State == "OFF") {
+				return service.MotorCommandResult{
+					Status: "dispatched",
+					State:  *req.State,
+				}, nil
+			}
+			return service.MotorCommandResult{}, service.ErrInvalidMotorPayload
+		},
+	}
+
+	router := api.NewRouter(cfg, nil, nil, nil, nil, mockAct, nil)
+
+	// Valid command MEDIUM
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/actuator/motor", bytes.NewBufferString(`{"state": "MEDIUM"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected status 200 OK, got %d. Body: %s", rr.Code, rr.Body.String())
+		}
+
+		var resp map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response JSON: %v", err)
+		}
+		if resp["status"] != "dispatched" || resp["state"] != "MEDIUM" {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+	}
+
+	// Invalid command
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/actuator/motor", bytes.NewBufferString(`{"state": "INVALID"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400 Bad Request, got %d", rr.Code)
+		}
+	}
+}
+
+
 func TestRouter_StateRoute_ConsolidatedSnapshot(t *testing.T) {
 	cfg := &config.Config{
 		CORSAllowedOrigins: []string{"*"},
@@ -386,7 +441,7 @@ func TestRouter_StateRoute_ConsolidatedSnapshot(t *testing.T) {
 				SystemState: &service.SystemState{
 					ID:         1,
 					IsPaused:   false,
-					MotorState: true,
+					MotorState: "ON",
 					ServoState: false,
 				},
 				ShapeCounts: []service.ShapeCount{

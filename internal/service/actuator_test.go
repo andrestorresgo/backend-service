@@ -175,3 +175,96 @@ func TestActuatorService_CommandServo_PublishError(t *testing.T) {
 		t.Errorf("expected error to wrap %v, got %v", expectedErr, err)
 	}
 }
+
+func TestActuatorService_CommandMotor_Success(t *testing.T) {
+	tests := []struct {
+		name          string
+		req           service.MotorCommandRequest
+		expectedState string
+	}{
+		{
+			name:          "String ON uppercase",
+			req:           service.MotorCommandRequest{State: strPtr("ON")},
+			expectedState: service.MotorStateOn,
+		},
+		{
+			name:          "String MEDIUM uppercase",
+			req:           service.MotorCommandRequest{State: strPtr("MEDIUM")},
+			expectedState: service.MotorStateMedium,
+		},
+		{
+			name:          "String OFF uppercase",
+			req:           service.MotorCommandRequest{State: strPtr("OFF")},
+			expectedState: service.MotorStateOff,
+		},
+		{
+			name:          "String medium lowercase with whitespace",
+			req:           service.MotorCommandRequest{State: strPtr("  medium \n")},
+			expectedState: service.MotorStateMedium,
+		},
+		{
+			name:          "String off lowercase",
+			req:           service.MotorCommandRequest{State: strPtr("off")},
+			expectedState: service.MotorStateOff,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockPub := &mockActuatorPublisher{}
+			svc := service.NewActuatorService(mockPub)
+
+			res, err := svc.CommandMotor(context.Background(), tt.req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if res.Status != "dispatched" {
+				t.Errorf("expected status 'dispatched', got '%s'", res.Status)
+			}
+			if res.State != tt.expectedState {
+				t.Errorf("expected state '%s', got '%s'", tt.expectedState, res.State)
+			}
+
+			if mockPub.topic != service.TopicActuatorMotor {
+				t.Errorf("expected topic '%s', got '%s'", service.TopicActuatorMotor, mockPub.topic)
+			}
+		})
+	}
+}
+
+func TestActuatorService_CommandMotor_ValidationErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		req  service.MotorCommandRequest
+	}{
+		{
+			name: "Nil request state",
+			req:  service.MotorCommandRequest{},
+		},
+		{
+			name: "Empty string state",
+			req:  service.MotorCommandRequest{State: strPtr("")},
+		},
+		{
+			name: "Invalid string state",
+			req:  service.MotorCommandRequest{State: strPtr("SUPER_FAST")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockPub := &mockActuatorPublisher{}
+			svc := service.NewActuatorService(mockPub)
+
+			_, err := svc.CommandMotor(context.Background(), tt.req)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !errors.Is(err, service.ErrInvalidMotorPayload) {
+				t.Errorf("expected ErrInvalidMotorPayload, got %v", err)
+			}
+		})
+	}
+}
+

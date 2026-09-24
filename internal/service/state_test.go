@@ -92,7 +92,7 @@ func TestStateService_UpdateTelemetry_Success(t *testing.T) {
 
 	data := service.TelemetryData{
 		IsPaused:   true,
-		MotorState: false,
+		MotorState: "OFF",
 		ServoState: true,
 		RedCount:   3,
 		GreenCount: 4,
@@ -114,8 +114,8 @@ func TestStateService_UpdateTelemetry_Success(t *testing.T) {
 	if repo.updatedState.IsPaused != true {
 		t.Errorf("expected IsPaused true, got %v", repo.updatedState.IsPaused)
 	}
-	if repo.updatedState.MotorState != false {
-		t.Errorf("expected MotorState false, got %v", repo.updatedState.MotorState)
+	if repo.updatedState.MotorState != "OFF" {
+		t.Errorf("expected MotorState 'OFF', got %v", repo.updatedState.MotorState)
 	}
 	if repo.updatedState.ServoState != true {
 		t.Errorf("expected ServoState true, got %v", repo.updatedState.ServoState)
@@ -147,7 +147,7 @@ func TestStateService_UpdateTelemetry_Clamping(t *testing.T) {
 
 	data := service.TelemetryData{
 		IsPaused:   false,
-		MotorState: true,
+		MotorState: "ON",
 		ServoState: false,
 		RedCount:   -10, // should clamp to 0
 		GreenCount: 6,   // should clamp to 5
@@ -307,7 +307,7 @@ func TestStateService_GetSystemState_And_GetShapeCounts(t *testing.T) {
 	expectedState := &service.SystemState{
 		ID:         1,
 		IsPaused:   false,
-		MotorState: true,
+		MotorState: "ON",
 		ServoState: true,
 	}
 	expectedCounts := []service.ShapeCount{
@@ -326,7 +326,7 @@ func TestStateService_GetSystemState_And_GetShapeCounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if state.ID != 1 || state.MotorState != true {
+	if state.ID != 1 || state.MotorState != "ON" {
 		t.Errorf("unexpected state: %+v", state)
 	}
 
@@ -345,7 +345,7 @@ func TestStateService_GetSnapshot_Success(t *testing.T) {
 	expectedState := &service.SystemState{
 		ID:         1,
 		IsPaused:   false,
-		MotorState: true,
+		MotorState: "ON",
 		ServoState: false,
 	}
 	expectedCounts := []service.ShapeCount{

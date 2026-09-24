@@ -30,7 +30,7 @@ var (
 type SystemState struct {
 	ID              int        `json:"id"`
 	IsPaused        bool       `json:"is_paused"`
-	MotorState      bool       `json:"motor_state"`
+	MotorState      string     `json:"motor_state"`
 	ServoState      bool       `json:"servo_state"`
 	LastTelemetryAt *time.Time `json:"last_telemetry_at"`
 }
@@ -47,12 +47,12 @@ type ShapeCount struct {
 
 // TelemetryData contains decoded telemetry fields from factory/telemetry.
 type TelemetryData struct {
-	IsPaused   bool `json:"is_paused"`
-	MotorState bool `json:"motor_state"`
-	ServoState bool `json:"servo_state"`
-	RedCount   int  `json:"red_count"`
-	GreenCount int  `json:"green_count"`
-	BlueCount  int  `json:"blue_count"`
+	IsPaused   bool   `json:"is_paused"`
+	MotorState string `json:"motor_state"`
+	ServoState bool   `json:"servo_state"`
+	RedCount   int    `json:"red_count"`
+	GreenCount int    `json:"green_count"`
+	BlueCount  int    `json:"blue_count"`
 }
 
 // RolloverData contains decoded batch rollover fields from factory/rollover.

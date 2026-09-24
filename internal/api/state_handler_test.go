@@ -39,7 +39,7 @@ func TestStateHandler(t *testing.T) {
 		SystemState: &service.SystemState{
 			ID:              1,
 			IsPaused:        false,
-			MotorState:      true,
+			MotorState:      "ON",
 			ServoState:      false,
 			LastTelemetryAt: &now,
 		},

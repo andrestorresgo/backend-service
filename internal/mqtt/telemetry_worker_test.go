@@ -82,8 +82,8 @@ func TestTelemetryWorker_ProcessValidPayload(t *testing.T) {
 	if !d.IsPaused {
 		t.Errorf("expected IsPaused true")
 	}
-	if d.MotorState {
-		t.Errorf("expected MotorState false")
+	if d.MotorState != "OFF" {
+		t.Errorf("expected MotorState OFF, got %s", d.MotorState)
 	}
 	if !d.ServoState {
 		t.Errorf("expected ServoState true")
@@ -98,6 +98,43 @@ func TestTelemetryWorker_ProcessValidPayload(t *testing.T) {
 		t.Errorf("expected BlueCount 4, got %d", d.BlueCount)
 	}
 }
+
+func TestTelemetryWorker_ProcessMotorSpeedStates(t *testing.T) {
+	updater := &mockTelemetryUpdater{}
+	worker := mqtt.NewTelemetryWorker(updater, 10)
+	worker.Start()
+
+	// 1. String "MEDIUM"
+	worker.HandleMessage([]byte(`{"is_paused":false,"motor_state":"MEDIUM","servo_state":false,"red_count":0,"green_count":0,"blue_count":0}`))
+	// 2. Numeric 1 ("ON")
+	worker.HandleMessage([]byte(`{"is_paused":false,"motor_state":1,"servo_state":false,"red_count":0,"green_count":0,"blue_count":0}`))
+	// 3. Numeric 2 ("MEDIUM")
+	worker.HandleMessage([]byte(`{"is_paused":false,"motor_state":2,"servo_state":false,"red_count":0,"green_count":0,"blue_count":0}`))
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(updater.getCaptured()) >= 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	worker.Stop()
+
+	captured := updater.getCaptured()
+	if len(captured) != 3 {
+		t.Fatalf("expected 3 telemetry updates captured, got %d", len(captured))
+	}
+	if captured[0].MotorState != "MEDIUM" {
+		t.Errorf("expected index 0 MotorState MEDIUM, got %s", captured[0].MotorState)
+	}
+	if captured[1].MotorState != "ON" {
+		t.Errorf("expected index 1 MotorState ON, got %s", captured[1].MotorState)
+	}
+	if captured[2].MotorState != "MEDIUM" {
+		t.Errorf("expected index 2 MotorState MEDIUM, got %s", captured[2].MotorState)
+	}
+}
+
 
 func TestTelemetryWorker_MalformedJSON(t *testing.T) {
 	updater := &mockTelemetryUpdater{}
