@@ -13,9 +13,10 @@ type BrokerStatusChecker interface {
 	IsConnected() bool
 }
 
-// StateSnapshotProvider specifies the domain contract for aggregating initial telemetry snapshot.
+// StateSnapshotProvider specifies the domain contract for aggregating initial telemetry snapshot and recent actions.
 type StateSnapshotProvider interface {
 	GetSnapshot(ctx context.Context, mqttConnected bool) (service.StateSnapshot, error)
+	GetRecentActions(ctx context.Context, limit int) ([]service.ActionRecord, error)
 }
 
 // StateHandler handles GET /api/v1/state delivering a consolidated system snapshot.

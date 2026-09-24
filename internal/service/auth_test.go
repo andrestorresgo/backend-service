@@ -411,3 +411,43 @@ func TestAuthService_Authenticate(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthService_LockdownActionRecorded(t *testing.T) {
+	fixedTime := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	clock := &MockClock{currentTime: fixedTime}
+	repo := NewMockAuthRepo()
+	repo.AddUser(service.User{ID: 1, Username: "Alice", PIN: "1234", FailedAttempts: 0})
+	rec := &mockActionRecorder{}
+
+	authService := service.NewAuthService(repo, clock, rec)
+
+	ctx := context.Background()
+	// 1st failure: failed_attempts = 1 (no lockout yet)
+	_, _ = authService.Authenticate(ctx, service.AuthRequest{UserID: 1, PIN: "9999", Source: service.AuthSourceKeypad})
+	if len(rec.actions) != 0 {
+		t.Fatalf("expected 0 action logs on 1st failure, got %d", len(rec.actions))
+	}
+
+	// 2nd failure: failed_attempts = 2 -> USER_LOCKOUT action recorded!
+	resp, err := authService.Authenticate(ctx, service.AuthRequest{UserID: 1, PIN: "9999", Source: service.AuthSourceKeypad})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != service.AuthStatusUserLocked {
+		t.Fatalf("expected USER_LOCKED, got %s", resp.Status)
+	}
+
+	if len(rec.actions) != 1 {
+		t.Fatalf("expected 1 action log on 2nd failure lockout, got %d", len(rec.actions))
+	}
+	act := rec.actions[0]
+	if act.ActionType != service.ActionTypeLockdown {
+		t.Errorf("expected ActionType LOCKDOWN, got %s", act.ActionType)
+	}
+	if act.ActionName != "USER_LOCKOUT" {
+		t.Errorf("expected ActionName USER_LOCKOUT, got %s", act.ActionName)
+	}
+	if act.Source != "KEYPAD" {
+		t.Errorf("expected Source KEYPAD, got %s", act.Source)
+	}
+}

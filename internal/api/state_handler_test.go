@@ -32,6 +32,10 @@ func (m *mockStateSnapshotProvider) GetSnapshot(ctx context.Context, mqttConnect
 	return service.StateSnapshot{}, errors.New("not implemented")
 }
 
+func (m *mockStateSnapshotProvider) GetRecentActions(ctx context.Context, limit int) ([]service.ActionRecord, error) {
+	return []service.ActionRecord{}, nil
+}
+
 func TestStateHandler(t *testing.T) {
 	now := time.Now()
 	uid := 1
@@ -55,6 +59,16 @@ func TestStateHandler(t *testing.T) {
 				UserID:    &uid,
 				Status:    service.AuditStatusSuccess,
 				Timestamp: now,
+			},
+		},
+		RecentActions: []service.ActionRecord{
+			{
+				ID:         "action-uuid-1",
+				ActionType: service.ActionTypeServo,
+				ActionName: "SERVO_OPEN",
+				Details:    "Servo gate commanded to OPEN",
+				Source:     "DASHBOARD",
+				Timestamp:  now,
 			},
 		},
 		MQTTConnected: true,
@@ -156,7 +170,106 @@ func TestStateHandler(t *testing.T) {
 				if len(resp.RecentAudits) != 1 {
 					t.Errorf("expected 1 recent audit, got %d", len(resp.RecentAudits))
 				}
+				if len(resp.RecentActions) != 1 {
+					t.Errorf("expected 1 recent action, got %d", len(resp.RecentActions))
+				}
 			}
 		})
 	}
+}
+
+type mockActionsProvider struct {
+	getRecentActionsFn func(ctx context.Context, limit int) ([]service.ActionRecord, error)
+}
+
+func (m *mockActionsProvider) GetRecentActions(ctx context.Context, limit int) ([]service.ActionRecord, error) {
+	if m.getRecentActionsFn != nil {
+		return m.getRecentActionsFn(ctx, limit)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func TestActionHandler(t *testing.T) {
+	now := time.Now()
+	sampleActions := []service.ActionRecord{
+		{
+			ID:         "act-1",
+			ActionType: service.ActionTypeServo,
+			ActionName: "SERVO_OPEN",
+			Details:    "Servo gate commanded to OPEN",
+			Source:     "DASHBOARD",
+			Timestamp:  now,
+		},
+		{
+			ID:         "act-2",
+			ActionType: service.ActionTypeMotor,
+			ActionName: "MOTOR_MEDIUM",
+			Details:    "Conveyor DC motor speed commanded to MEDIUM",
+			Source:     "DASHBOARD",
+			Timestamp:  now,
+		},
+	}
+
+	t.Run("200 OK with actions", func(t *testing.T) {
+		provider := &mockActionsProvider{
+			getRecentActionsFn: func(ctx context.Context, limit int) ([]service.ActionRecord, error) {
+				return sampleActions, nil
+			},
+		}
+
+		handler := api.ActionHandler(provider)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/actions?limit=10", nil)
+		rr := httptest.NewRecorder()
+
+		handler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", rr.Code)
+		}
+
+		var resp struct {
+			Actions []service.ActionRecord `json:"actions"`
+			Count   int                    `json:"count"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if resp.Count != 2 {
+			t.Errorf("expected count 2, got %d", resp.Count)
+		}
+		if len(resp.Actions) != 2 {
+			t.Errorf("expected 2 actions, got %d", len(resp.Actions))
+		}
+	})
+
+	t.Run("503 Service Unavailable when provider is nil", func(t *testing.T) {
+		handler := api.ActionHandler(nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/actions", nil)
+		rr := httptest.NewRecorder()
+
+		handler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", rr.Code)
+		}
+	})
+
+	t.Run("500 Internal Server Error when provider fails", func(t *testing.T) {
+		provider := &mockActionsProvider{
+			getRecentActionsFn: func(ctx context.Context, limit int) ([]service.ActionRecord, error) {
+				return nil, errors.New("query failed")
+			},
+		}
+
+		handler := api.ActionHandler(provider)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/actions", nil)
+		rr := httptest.NewRecorder()
+
+		handler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d", rr.Code)
+		}
+	})
 }

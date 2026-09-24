@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/andrestorresgo/backend-service/internal/service"
 )
@@ -265,6 +266,79 @@ func TestActuatorService_CommandMotor_ValidationErrors(t *testing.T) {
 				t.Errorf("expected ErrInvalidMotorPayload, got %v", err)
 			}
 		})
+	}
+}
+
+type mockActionRecorder struct {
+	actions []service.ActionRecord
+}
+
+func (m *mockActionRecorder) InsertActionLog(ctx context.Context, actionType service.ActionType, actionName string, details string, source string, timestamp time.Time) error {
+	m.actions = append(m.actions, service.ActionRecord{
+		ActionType: actionType,
+		ActionName: actionName,
+		Details:    details,
+		Source:     source,
+		Timestamp:  timestamp,
+	})
+	return nil
+}
+
+func TestActuatorService_CommandServo_RecordsAction(t *testing.T) {
+	mockPub := &mockActuatorPublisher{}
+	mockRec := &mockActionRecorder{}
+	svc := service.NewActuatorService(mockPub, mockRec)
+
+	state := "OPEN"
+	res, err := svc.CommandServo(context.Background(), service.ServoCommandRequest{State: &state})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.State != "OPEN" {
+		t.Errorf("expected OPEN, got %s", res.State)
+	}
+
+	if len(mockRec.actions) != 1 {
+		t.Fatalf("expected 1 action recorded, got %d", len(mockRec.actions))
+	}
+	act := mockRec.actions[0]
+	if act.ActionType != service.ActionTypeServo {
+		t.Errorf("expected ActionType SERVO, got %s", act.ActionType)
+	}
+	if act.ActionName != "SERVO_OPEN" {
+		t.Errorf("expected ActionName SERVO_OPEN, got %s", act.ActionName)
+	}
+	if act.Source != "DASHBOARD" {
+		t.Errorf("expected Source DASHBOARD, got %s", act.Source)
+	}
+}
+
+func TestActuatorService_CommandMotor_RecordsAction(t *testing.T) {
+	mockPub := &mockActuatorPublisher{}
+	mockRec := &mockActionRecorder{}
+	svc := service.NewActuatorService(mockPub, mockRec)
+
+	state := "MEDIUM"
+	res, err := svc.CommandMotor(context.Background(), service.MotorCommandRequest{State: &state})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.State != "MEDIUM" {
+		t.Errorf("expected MEDIUM, got %s", res.State)
+	}
+
+	if len(mockRec.actions) != 1 {
+		t.Fatalf("expected 1 action recorded, got %d", len(mockRec.actions))
+	}
+	act := mockRec.actions[0]
+	if act.ActionType != service.ActionTypeMotor {
+		t.Errorf("expected ActionType MOTOR, got %s", act.ActionType)
+	}
+	if act.ActionName != "MOTOR_MEDIUM" {
+		t.Errorf("expected ActionName MOTOR_MEDIUM, got %s", act.ActionName)
+	}
+	if act.Source != "DASHBOARD" {
+		t.Errorf("expected Source DASHBOARD, got %s", act.Source)
 	}
 }
 

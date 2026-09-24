@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Servo state constants matching hardware protocol and dashboard expectations.
@@ -62,12 +63,35 @@ type ActuatorPublisher interface {
 // Adheres to ADR-0006: publishes command to HiveMQ without optimistically mutating
 // the system_state singleton table in PostgreSQL.
 type ActuatorService struct {
-	publisher ActuatorPublisher
+	publisher       ActuatorPublisher
+	recorder        ActionRecorder
+	actionPublisher ActionPublisher
+	clock           Clock
 }
 
 // NewActuatorService constructs a new ActuatorService instance.
-func NewActuatorService(pub ActuatorPublisher) *ActuatorService {
-	return &ActuatorService{publisher: pub}
+func NewActuatorService(pub ActuatorPublisher, recorder ...ActionRecorder) *ActuatorService {
+	svc := &ActuatorService{
+		publisher: pub,
+		clock:     RealClock{},
+	}
+	if len(recorder) > 0 {
+		svc.recorder = recorder[0]
+	}
+	return svc
+}
+
+// SetActionRecorder sets the action recorder and optional clock.
+func (s *ActuatorService) SetActionRecorder(recorder ActionRecorder, clock Clock) {
+	s.recorder = recorder
+	if clock != nil {
+		s.clock = clock
+	}
+}
+
+// SetActionPublisher sets the optional action publisher for MQTT broadcasting.
+func (s *ActuatorService) SetActionPublisher(pub ActionPublisher) {
+	s.actionPublisher = pub
 }
 
 // CommandServo validates the requested servo state and dispatches the instruction to HiveMQ.
@@ -98,6 +122,12 @@ func (s *ActuatorService) CommandServo(ctx context.Context, req ServoCommandRequ
 	if err := s.publisher.Publish(TopicActuatorServo, 1, false, []byte(targetState)); err != nil {
 		return ServoCommandResult{}, fmt.Errorf("failed to publish servo command to MQTT: %w", err)
 	}
+
+	now := time.Now()
+	if s.clock != nil {
+		now = s.clock.Now()
+	}
+	BroadcastAction(ctx, s.recorder, s.actionPublisher, ActionTypeServo, fmt.Sprintf("SERVO_%s", targetState), fmt.Sprintf("Servo gate commanded to %s", targetState), "DASHBOARD", now)
 
 	return ServoCommandResult{
 		Status: "dispatched",
@@ -135,6 +165,12 @@ func (s *ActuatorService) CommandMotor(ctx context.Context, req MotorCommandRequ
 	if err := s.publisher.Publish(TopicActuatorMotor, 1, false, []byte(payload)); err != nil {
 		return MotorCommandResult{}, fmt.Errorf("failed to publish motor command to MQTT: %w", err)
 	}
+
+	now := time.Now()
+	if s.clock != nil {
+		now = s.clock.Now()
+	}
+	BroadcastAction(ctx, s.recorder, s.actionPublisher, ActionTypeMotor, fmt.Sprintf("MOTOR_%s", targetState), fmt.Sprintf("Conveyor DC motor speed commanded to %s", targetState), "DASHBOARD", now)
 
 	return MotorCommandResult{
 		Status: "dispatched",

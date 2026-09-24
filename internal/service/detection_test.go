@@ -399,3 +399,55 @@ func TestDetectionService_EventIDDeduplication(t *testing.T) {
 	}
 }
 
+func TestDetectionService_RecordsActions(t *testing.T) {
+	ctx := context.Background()
+	pub := &mockPublisher{}
+	clock := &mockClock{now: time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)}
+	rec := &mockActionRecorder{}
+	svc := service.NewDetectionService(pub, clock, rec)
+
+	// 1. Dispatched detection records FIGURE_DETECTED action
+	res, err := svc.ProcessDetection(ctx, service.DetectionRequest{ShapeName: "triangle"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Status != service.DetectionStatusDispatched {
+		t.Fatalf("expected dispatched, got %s", res.Status)
+	}
+
+	if len(rec.actions) != 1 {
+		t.Fatalf("expected 1 action recorded, got %d", len(rec.actions))
+	}
+	act1 := rec.actions[0]
+	if act1.ActionType != service.ActionTypeDetection {
+		t.Errorf("expected DETECTION, got %s", act1.ActionType)
+	}
+	if act1.ActionName != "FIGURE_DETECTED" {
+		t.Errorf("expected FIGURE_DETECTED, got %s", act1.ActionName)
+	}
+	if act1.Source != "VISION_SERVICE" {
+		t.Errorf("expected VISION_SERVICE, got %s", act1.Source)
+	}
+
+	// 2. Debounced duplicate records DETECTION_DEBOUNCED action
+	clock.now = clock.now.Add(500 * time.Millisecond) // within 2s debounce window
+	res2, err := svc.ProcessDetection(ctx, service.DetectionRequest{ShapeName: "triangle"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res2.Status != service.DetectionStatusDebounced {
+		t.Fatalf("expected debounced, got %s", res2.Status)
+	}
+
+	if len(rec.actions) != 2 {
+		t.Fatalf("expected 2 actions recorded, got %d", len(rec.actions))
+	}
+	act2 := rec.actions[1]
+	if act2.ActionType != service.ActionTypeDetection {
+		t.Errorf("expected DETECTION, got %s", act2.ActionType)
+	}
+	if act2.ActionName != "DETECTION_DEBOUNCED" {
+		t.Errorf("expected DETECTION_DEBOUNCED, got %s", act2.ActionName)
+	}
+}
+

@@ -23,11 +23,14 @@ type mockStateRepo struct {
 	rolloverTime      time.Time
 	rolloverErr       error
 
-	systemState  *service.SystemState
-	shapeCounts  []service.ShapeCount
-	recentAudits []service.AuditRecord
-	getErr       error
-	auditsErr    error
+	systemState   *service.SystemState
+	shapeCounts   []service.ShapeCount
+	recentAudits  []service.AuditRecord
+	recentActions []service.ActionRecord
+	loggedActions []service.ActionRecord
+	getErr        error
+	auditsErr     error
+	actionsErr    error
 }
 
 func (m *mockStateRepo) UpdateTelemetry(ctx context.Context, state service.SystemState, counts map[int]int, updatedAt time.Time) error {
@@ -82,6 +85,28 @@ func (m *mockStateRepo) GetRecentAudits(ctx context.Context, limit int) ([]servi
 		return nil, m.auditsErr
 	}
 	return m.recentAudits, nil
+}
+
+func (m *mockStateRepo) InsertActionLog(ctx context.Context, actionType service.ActionType, actionName string, details string, source string, timestamp time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.loggedActions = append(m.loggedActions, service.ActionRecord{
+		ActionType: actionType,
+		ActionName: actionName,
+		Details:    details,
+		Source:     source,
+		Timestamp:  timestamp,
+	})
+	return nil
+}
+
+func (m *mockStateRepo) GetRecentActions(ctx context.Context, limit int) ([]service.ActionRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.actionsErr != nil {
+		return nil, m.actionsErr
+	}
+	return m.recentActions, nil
 }
 
 func TestStateService_UpdateTelemetry_Success(t *testing.T) {
@@ -362,11 +387,22 @@ func TestStateService_GetSnapshot_Success(t *testing.T) {
 			Timestamp: time.Now(),
 		},
 	}
+	expectedActions := []service.ActionRecord{
+		{
+			ID:         "act-1",
+			ActionType: service.ActionTypeLockdown,
+			ActionName: "LOCKDOWN_ENGAGED",
+			Details:    "Machine Pause engaged - Total physical actuation lockout active",
+			Source:     "HARDWARE",
+			Timestamp:  time.Now(),
+		},
+	}
 
 	repo := &mockStateRepo{
-		systemState:  expectedState,
-		shapeCounts:  expectedCounts,
-		recentAudits: expectedAudits,
+		systemState:   expectedState,
+		shapeCounts:   expectedCounts,
+		recentAudits:  expectedAudits,
+		recentActions: expectedActions,
 	}
 	svc := service.NewStateService(repo, clock)
 
@@ -385,6 +421,9 @@ func TestStateService_GetSnapshot_Success(t *testing.T) {
 	if len(snapshot.RecentAudits) != 1 {
 		t.Errorf("expected 1 recent audit, got %d", len(snapshot.RecentAudits))
 	}
+	if len(snapshot.RecentActions) != 1 {
+		t.Errorf("expected 1 recent action, got %d", len(snapshot.RecentActions))
+	}
 	if !snapshot.MQTTConnected {
 		t.Errorf("expected MQTTConnected true, got %v", snapshot.MQTTConnected)
 	}
@@ -402,9 +441,10 @@ func TestStateService_GetSnapshot_Success(t *testing.T) {
 func TestStateService_GetSnapshot_EmptySlicesNonNull(t *testing.T) {
 	clock := newMockClock(time.Now())
 	repo := &mockStateRepo{
-		systemState:  &service.SystemState{ID: 1},
-		shapeCounts:  nil,
-		recentAudits: nil,
+		systemState:   &service.SystemState{ID: 1},
+		shapeCounts:   nil,
+		recentAudits:  nil,
+		recentActions: nil,
 	}
 	svc := service.NewStateService(repo, clock)
 
@@ -418,6 +458,9 @@ func TestStateService_GetSnapshot_EmptySlicesNonNull(t *testing.T) {
 	}
 	if snapshot.RecentAudits == nil {
 		t.Error("expected non-nil empty recent audits slice")
+	}
+	if snapshot.RecentActions == nil {
+		t.Error("expected non-nil empty recent actions slice")
 	}
 }
 
@@ -447,4 +490,107 @@ func TestStateService_GetSnapshot_ErrorHandling(t *testing.T) {
 			t.Fatal("expected error, got nil")
 		}
 	})
+
+	t.Run("RecentActions repo error", func(t *testing.T) {
+		repo := &mockStateRepo{
+			systemState: &service.SystemState{ID: 1},
+			shapeCounts: []service.ShapeCount{},
+			actionsErr:  errors.New("actions query failed"),
+		}
+		svc := service.NewStateService(repo, clock)
+
+		_, err := svc.GetSnapshot(context.Background(), true)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
+func TestStateService_UpdateTelemetry_LockdownActions(t *testing.T) {
+	clock := newMockClock(time.Now())
+	repo := &mockStateRepo{}
+	svc := service.NewStateService(repo, clock)
+
+	ctx := context.Background()
+
+	// Initial telemetry with IsPaused: false
+	err := svc.UpdateTelemetry(ctx, service.TelemetryData{
+		IsPaused:   false,
+		MotorState: "OFF",
+		ServoState: false,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Initial baseline does not trigger a transition
+	if len(repo.loggedActions) != 0 {
+		t.Errorf("expected 0 logged actions on initial unpaused baseline, got %d", len(repo.loggedActions))
+	}
+
+	// Machine pause toggled: IsPaused becomes true (lockdown engaged)
+	err = svc.UpdateTelemetry(ctx, service.TelemetryData{
+		IsPaused:   true,
+		MotorState: "OFF",
+		ServoState: false,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(repo.loggedActions) != 1 {
+		t.Fatalf("expected 1 logged action after pause engaged, got %d", len(repo.loggedActions))
+	}
+	act := repo.loggedActions[0]
+	if act.ActionType != service.ActionTypeLockdown {
+		t.Errorf("expected action type LOCKDOWN, got %s", act.ActionType)
+	}
+	if act.ActionName != "LOCKDOWN_ENGAGED" {
+		t.Errorf("expected action name LOCKDOWN_ENGAGED, got %s", act.ActionName)
+	}
+
+	// Machine pause released: IsPaused becomes false (lockdown released)
+	err = svc.UpdateTelemetry(ctx, service.TelemetryData{
+		IsPaused:   false,
+		MotorState: "MEDIUM",
+		ServoState: false,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(repo.loggedActions) != 2 {
+		t.Fatalf("expected 2 logged actions after pause released, got %d", len(repo.loggedActions))
+	}
+	act2 := repo.loggedActions[1]
+	if act2.ActionType != service.ActionTypeLockdown {
+		t.Errorf("expected action type LOCKDOWN, got %s", act2.ActionType)
+	}
+	if act2.ActionName != "LOCKDOWN_RELEASED" {
+		t.Errorf("expected action name LOCKDOWN_RELEASED, got %s", act2.ActionName)
+	}
+}
+
+func TestStateService_ProcessRollover_LogsAction(t *testing.T) {
+	clock := newMockClock(time.Now())
+	repo := &mockStateRepo{}
+	svc := service.NewStateService(repo, clock)
+
+	err := svc.ProcessRollover(context.Background(), service.RolloverData{
+		ShapeID:   1,
+		ShapeName: "circle",
+		Timestamp: time.Now().Unix(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(repo.loggedActions) != 1 {
+		t.Fatalf("expected 1 logged action for rollover, got %d", len(repo.loggedActions))
+	}
+	if repo.loggedActions[0].ActionType != service.ActionTypeDetection {
+		t.Errorf("expected action type DETECTION, got %s", repo.loggedActions[0].ActionType)
+	}
+	if repo.loggedActions[0].ActionName != "BATCH_ROLLOVER" {
+		t.Errorf("expected action name BATCH_ROLLOVER, got %s", repo.loggedActions[0].ActionName)
+	}
 }

@@ -40,7 +40,7 @@ func TestRunMigrations_Success(t *testing.T) {
 	fullSQL := strings.Join(mockExec.executedSQL, "\n")
 
 	// Verify required tables are declared
-	requiredTables := []string{"users", "system_state", "shape_counts", "auth_audit_logs"}
+	requiredTables := []string{"users", "system_state", "shape_counts", "auth_audit_logs", "action_logs"}
 	for _, table := range requiredTables {
 		if !strings.Contains(fullSQL, "CREATE TABLE IF NOT EXISTS "+table) {
 			t.Errorf("migration SQL missing table declaration for %s", table)

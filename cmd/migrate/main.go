@@ -97,6 +97,13 @@ func main() {
 	}
 	fmt.Printf("✓ Table 'auth_audit_logs': table verified (%d logs present)\n", auditCount)
 
+	// 5. Verify Action Logs
+	var actionCount int
+	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM action_logs").Scan(&actionCount); err != nil {
+		log.Fatalf("[ERROR] Failed to query action_logs table: %v", err)
+	}
+	fmt.Printf("✓ Table 'action_logs': table verified (%d logs present)\n", actionCount)
+
 	fmt.Println("----------------------------")
 	log.Println("[INFO] All tables and seed data verified successfully.")
 }

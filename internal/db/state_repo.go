@@ -208,3 +208,70 @@ func (r *PostgresStateRepository) GetRecentAudits(ctx context.Context, limit int
 
 	return records, nil
 }
+
+// InsertActionLog records a new system action log entry.
+func (r *PostgresStateRepository) InsertActionLog(ctx context.Context, actionType service.ActionType, actionName string, details string, source string, timestamp time.Time) error {
+	if r.pool == nil {
+		return errors.New("database pool is not initialized")
+	}
+
+	query := `
+		INSERT INTO action_logs (action_type, action_name, details, source, timestamp)
+		VALUES ($1, $2, $3, $4, $5)
+	`
+	_, err := r.pool.Exec(ctx, query, string(actionType), actionName, details, source, timestamp)
+	if err != nil {
+		return fmt.Errorf("failed to insert action log: %w", err)
+	}
+	return nil
+}
+
+// GetRecentActions queries the latest system action log entries up to limit.
+func (r *PostgresStateRepository) GetRecentActions(ctx context.Context, limit int) ([]service.ActionRecord, error) {
+	if r.pool == nil {
+		return nil, errors.New("database pool is not initialized")
+	}
+
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := `
+		SELECT id, action_type, action_name, details, source, timestamp
+		FROM action_logs
+		ORDER BY timestamp DESC, id DESC
+		LIMIT $1
+	`
+	rows, err := r.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query action_logs: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]service.ActionRecord, 0)
+	for rows.Next() {
+		var rec service.ActionRecord
+		var id string
+		var actionType string
+		if err := rows.Scan(
+			&id,
+			&actionType,
+			&rec.ActionName,
+			&rec.Details,
+			&rec.Source,
+			&rec.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan action_logs row: %w", err)
+		}
+		rec.ID = id
+		rec.ActionType = service.ActionType(actionType)
+		records = append(records, rec)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return records, nil
+}
+

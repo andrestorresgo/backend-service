@@ -70,25 +70,45 @@ type DetectionPublisher interface {
 
 // DetectionService manages shape resolution, debounce filtering, and MQTT dispatching.
 type DetectionService struct {
-	publisher    DetectionPublisher
-	clock        Clock
-	mu           sync.Mutex
-	lastSeen     map[uint8]time.Time
-	recentEvents map[string]time.Time
-	detectionID  atomic.Uint32
+	publisher       DetectionPublisher
+	actionPublisher ActionPublisher
+	clock           Clock
+	recorder        ActionRecorder
+	mu              sync.Mutex
+	lastSeen        map[uint8]time.Time
+	recentEvents    map[string]time.Time
+	detectionID     atomic.Uint32
 }
 
 // NewDetectionService constructs a new DetectionService instance.
-func NewDetectionService(pub DetectionPublisher, clock Clock) *DetectionService {
+func NewDetectionService(pub DetectionPublisher, clock Clock, recorder ...ActionRecorder) *DetectionService {
 	if clock == nil {
 		clock = RealClock{}
 	}
-	return &DetectionService{
+	svc := &DetectionService{
 		publisher:    pub,
 		clock:        clock,
 		lastSeen:     make(map[uint8]time.Time),
 		recentEvents: make(map[string]time.Time),
 	}
+	if len(recorder) > 0 {
+		svc.recorder = recorder[0]
+	}
+	return svc
+}
+
+// SetActionRecorder sets the action recorder.
+func (s *DetectionService) SetActionRecorder(recorder ActionRecorder) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recorder = recorder
+}
+
+// SetActionPublisher sets the optional action publisher for MQTT broadcasting.
+func (s *DetectionService) SetActionPublisher(pub ActionPublisher) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.actionPublisher = pub
 }
 
 // ResolveShape normalizes and validates shape identifiers from a DetectionRequest.
@@ -212,6 +232,7 @@ func (s *DetectionService) ProcessDetection(ctx context.Context, req DetectionRe
 	lastTime, exists := s.lastSeen[shapeID]
 	if exists && now.Sub(lastTime) < DebounceDuration {
 		s.mu.Unlock()
+		BroadcastAction(ctx, s.recorder, s.actionPublisher, ActionTypeDetection, "DETECTION_DEBOUNCED", fmt.Sprintf("Figure %s (Shape ID %d) dropped (duplicate within 2s debounce window)", shapeName, shapeID), "VISION_SERVICE", now)
 		return DetectionResult{
 			OK:      true,
 			Status:  DetectionStatusDebounced,
@@ -244,6 +265,8 @@ func (s *DetectionService) ProcessDetection(ctx context.Context, req DetectionRe
 	if err := s.publisher.Publish(TopicDetections, 1, false, payloadBytes); err != nil {
 		return DetectionResult{}, fmt.Errorf("failed to publish detection to MQTT: %w", err)
 	}
+
+	BroadcastAction(ctx, s.recorder, s.actionPublisher, ActionTypeDetection, "FIGURE_DETECTED", fmt.Sprintf("Figure %s (Shape ID %d) detected and dispatched to Actuator", shapeName, shapeID), "VISION_SERVICE", now)
 
 	return DetectionResult{
 		OK:          true,

@@ -57,11 +57,12 @@ func main() {
 	var pinger db.DBPinger
 	var authService *service.AuthService
 	var stateService *service.StateService
+	var stateRepo *db.PostgresStateRepository
 	if pool != nil {
 		pinger = pool
 		authRepo := db.NewPostgresAuthRepository(pool)
-		authService = service.NewAuthService(authRepo, service.RealClock{})
-		stateRepo := db.NewPostgresStateRepository(pool)
+		stateRepo = db.NewPostgresStateRepository(pool)
+		authService = service.NewAuthService(authRepo, service.RealClock{}, stateRepo)
 		stateService = service.NewStateService(stateRepo, service.RealClock{})
 	}
 
@@ -80,6 +81,7 @@ func main() {
 				cfg.MQTTBrokerHost, cfg.MQTTBrokerPort, mqttErr)
 		} else {
 			if authService != nil {
+				authService.SetActionPublisher(mqttClient)
 				authWorker = mqtt.NewAuthWorker(authService, mqttClient, 100)
 				authWorker.Start()
 				if err := mqttClient.SubscribeAuthRequest(authWorker); err != nil {
@@ -87,6 +89,7 @@ func main() {
 				}
 			}
 			if stateService != nil {
+				stateService.SetActionPublisher(mqttClient)
 				telemetryWorker = mqtt.NewTelemetryWorker(stateService, 100)
 				telemetryWorker.Start()
 				if err := mqttClient.SubscribeTelemetry(telemetryWorker); err != nil {
@@ -99,8 +102,12 @@ func main() {
 					log.Printf("[ERROR] Failed to subscribe rollover worker to MQTT: %v", err)
 				}
 			}
-			detectionService = service.NewDetectionService(mqttClient, service.RealClock{})
-			actuatorService = service.NewActuatorService(mqttClient)
+			var recorder service.ActionRecorder
+			if stateRepo != nil {
+				recorder = stateRepo
+			}
+			detectionService = service.NewDetectionService(mqttClient, service.RealClock{}, recorder)
+			actuatorService = service.NewActuatorService(mqttClient, recorder)
 		}
 	}
 

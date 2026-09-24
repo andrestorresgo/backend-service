@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -73,25 +74,32 @@ type AuditRecord struct {
 
 // StateSnapshot represents the consolidated system snapshot for dashboard initialization.
 type StateSnapshot struct {
-	SystemState   *SystemState  `json:"system_state"`
-	ShapeCounts   []ShapeCount  `json:"shape_counts"`
-	RecentAudits  []AuditRecord `json:"recent_audits"`
-	MQTTConnected bool          `json:"mqtt_connected"`
+	SystemState   *SystemState   `json:"system_state"`
+	ShapeCounts   []ShapeCount   `json:"shape_counts"`
+	RecentAudits  []AuditRecord  `json:"recent_audits"`
+	RecentActions []ActionRecord `json:"recent_actions"`
+	MQTTConnected bool           `json:"mqtt_connected"`
 }
 
-// StateRepository abstracts persistence operations for system state and counters.
+// StateRepository abstracts persistence operations for system state, counters, and action logs.
 type StateRepository interface {
 	UpdateTelemetry(ctx context.Context, state SystemState, counts map[int]int, updatedAt time.Time) error
 	IncrementRollover(ctx context.Context, shapeID int, increment int, updatedAt time.Time) error
 	GetSystemState(ctx context.Context) (*SystemState, error)
 	GetShapeCounts(ctx context.Context) ([]ShapeCount, error)
 	GetRecentAudits(ctx context.Context, limit int) ([]AuditRecord, error)
+	InsertActionLog(ctx context.Context, actionType ActionType, actionName string, details string, source string, timestamp time.Time) error
+	GetRecentActions(ctx context.Context, limit int) ([]ActionRecord, error)
 }
 
-// StateService coordinates authoritative telemetry synchronization and atomic rollover accumulation.
+// StateService coordinates authoritative telemetry synchronization, atomic rollover accumulation, and lockdown action logging.
 type StateService struct {
-	repo  StateRepository
-	clock Clock
+	repo          StateRepository
+	clock         Clock
+	publisher     ActionPublisher
+	mu            sync.Mutex
+	hasLastPaused bool
+	lastPaused    bool
 }
 
 // NewStateService constructs a new StateService.
@@ -103,6 +111,13 @@ func NewStateService(repo StateRepository, clock Clock) *StateService {
 		repo:  repo,
 		clock: clock,
 	}
+}
+
+// SetActionPublisher configures an optional MQTT publisher for broadcasting action events.
+func (s *StateService) SetActionPublisher(pub ActionPublisher) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publisher = pub
 }
 
 // UpdateTelemetry updates the singleton system_state and synchronizes live_buffer counters.
@@ -127,6 +142,19 @@ func (s *StateService) UpdateTelemetry(ctx context.Context, data TelemetryData) 
 		return fmt.Errorf("failed to update telemetry in repository: %w", err)
 	}
 
+	// Detect machine pause / hardware lockout state transitions
+	s.mu.Lock()
+	if s.hasLastPaused && s.lastPaused != data.IsPaused {
+		if data.IsPaused {
+			BroadcastAction(ctx, s.repo, s.publisher, ActionTypeLockdown, "LOCKDOWN_ENGAGED", "Machine Pause engaged - Total physical actuation lockout active", "HARDWARE", now)
+		} else {
+			BroadcastAction(ctx, s.repo, s.publisher, ActionTypeLockdown, "LOCKDOWN_RELEASED", "Machine Pause released - Physical actuation resumed", "HARDWARE", now)
+		}
+	}
+	s.hasLastPaused = true
+	s.lastPaused = data.IsPaused
+	s.mu.Unlock()
+
 	return nil
 }
 
@@ -146,6 +174,8 @@ func (s *StateService) ProcessRollover(ctx context.Context, data RolloverData) e
 		return fmt.Errorf("failed to process rollover in repository: %w", err)
 	}
 
+	BroadcastAction(ctx, s.repo, s.publisher, ActionTypeDetection, "BATCH_ROLLOVER", fmt.Sprintf("Batch complete for shape %s (Shape ID %d) - +5 accumulated", data.ShapeName, shapeID), "HARDWARE", now)
+
 	return nil
 }
 
@@ -159,7 +189,22 @@ func (s *StateService) GetShapeCounts(ctx context.Context) ([]ShapeCount, error)
 	return s.repo.GetShapeCounts(ctx)
 }
 
-// GetSnapshot retrieves the consolidated system state, shape counters, and recent auth audits.
+// GetRecentActions retrieves recent system action records.
+func (s *StateService) GetRecentActions(ctx context.Context, limit int) ([]ActionRecord, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	records, err := s.repo.GetRecentActions(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	if records == nil {
+		records = []ActionRecord{}
+	}
+	return records, nil
+}
+
+// GetSnapshot retrieves the consolidated system state, shape counters, recent auth audits, and recent system actions.
 func (s *StateService) GetSnapshot(ctx context.Context, mqttConnected bool) (StateSnapshot, error) {
 	systemState, err := s.repo.GetSystemState(ctx)
 	if err != nil {
@@ -182,10 +227,19 @@ func (s *StateService) GetSnapshot(ctx context.Context, mqttConnected bool) (Sta
 		recentAudits = []AuditRecord{}
 	}
 
+	recentActions, err := s.repo.GetRecentActions(ctx, 20)
+	if err != nil {
+		return StateSnapshot{}, fmt.Errorf("failed to get recent actions: %w", err)
+	}
+	if recentActions == nil {
+		recentActions = []ActionRecord{}
+	}
+
 	return StateSnapshot{
 		SystemState:   systemState,
 		ShapeCounts:   shapeCounts,
 		RecentAudits:  recentAudits,
+		RecentActions: recentActions,
 		MQTTConnected: mqttConnected,
 	}, nil
 }

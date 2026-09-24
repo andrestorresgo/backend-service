@@ -53,6 +53,7 @@ func NewRouter(
 		r.Post("/actuator/servo", ActuatorServoHandler(actuator))
 		r.Post("/actuator/motor", ActuatorMotorHandler(actuator))
 		r.Get("/state", StateHandler(state, broker))
+		r.Get("/actions", ActionHandler(state))
 	})
 
 	// Compatibility route for external vision service webhook contract

@@ -97,19 +97,35 @@ type AuthRepository interface {
 
 // AuthService coordinates authentication logic and lockout enforcement.
 type AuthService struct {
-	repo  AuthRepository
-	clock Clock
+	repo      AuthRepository
+	clock     Clock
+	recorder  ActionRecorder
+	publisher ActionPublisher
 }
 
 // NewAuthService constructs a new AuthService.
-func NewAuthService(repo AuthRepository, clock Clock) *AuthService {
+func NewAuthService(repo AuthRepository, clock Clock, recorder ...ActionRecorder) *AuthService {
 	if clock == nil {
 		clock = RealClock{}
 	}
-	return &AuthService{
+	svc := &AuthService{
 		repo:  repo,
 		clock: clock,
 	}
+	if len(recorder) > 0 {
+		svc.recorder = recorder[0]
+	}
+	return svc
+}
+
+// SetActionRecorder sets the action recorder.
+func (s *AuthService) SetActionRecorder(recorder ActionRecorder) {
+	s.recorder = recorder
+}
+
+// SetActionPublisher sets the optional action publisher.
+func (s *AuthService) SetActionPublisher(pub ActionPublisher) {
+	s.publisher = pub
 }
 
 // Authenticate verifies credentials inside a row-locked transaction and enforces lockout rules.
@@ -184,6 +200,7 @@ func (s *AuthService) Authenticate(ctx context.Context, req AuthRequest) (AuthRe
 				return fmt.Errorf("failed to apply user lockout: %w", err)
 			}
 			_ = txRepo.InsertAuditLog(ctx, source, &user.ID, AuditStatusUserLocked, now)
+			BroadcastAction(ctx, s.recorder, s.publisher, ActionTypeLockdown, "USER_LOCKOUT", fmt.Sprintf("Operator #%d locked out for 60 seconds after 2 failed PIN attempts", user.ID), string(source), now)
 			resp = AuthResponse{
 				Status:            AuthStatusUserLocked,
 				RemainingAttempts: 0,

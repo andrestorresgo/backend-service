@@ -47,4 +47,18 @@ func TestPostgresStateRepository_UninitializedPool(t *testing.T) {
 			t.Fatal("expected error with nil pool, got nil")
 		}
 	})
+
+	t.Run("InsertActionLog with nil pool", func(t *testing.T) {
+		err := repo.InsertActionLog(ctx, service.ActionTypeServo, "SERVO_OPEN", "details", "DASHBOARD", time.Now())
+		if err == nil {
+			t.Fatal("expected error with nil pool, got nil")
+		}
+	})
+
+	t.Run("GetRecentActions with nil pool", func(t *testing.T) {
+		_, err := repo.GetRecentActions(ctx, 10)
+		if err == nil {
+			t.Fatal("expected error with nil pool, got nil")
+		}
+	})
 }
