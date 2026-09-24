@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
@@ -14,9 +15,17 @@ import (
 	"github.com/andrestorresgo/backend-service/internal/config"
 )
 
+type subscriptionRecord struct {
+	topic   string
+	qos     byte
+	handler paho.MessageHandler
+}
+
 // Client wraps Paho MQTT client providing connection management and publishing.
 type Client struct {
-	pahoClient paho.Client
+	pahoClient    paho.Client
+	mu            sync.RWMutex
+	subscriptions map[string]subscriptionRecord
 }
 
 // NewClient initializes and connects an MQTT client configured from application settings.
@@ -43,10 +52,15 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		})
 	}
 
-	opts.OnConnect = func(c paho.Client) {
-		log.Printf("[INFO] Connected to MQTT broker: %s", brokerURI)
+	c := &Client{
+		subscriptions: make(map[string]subscriptionRecord),
 	}
-	opts.OnConnectionLost = func(c paho.Client, err error) {
+
+	opts.OnConnect = func(client paho.Client) {
+		log.Printf("[INFO] Connected to MQTT broker: %s", brokerURI)
+		c.resubscribeAll(client)
+	}
+	opts.OnConnectionLost = func(_ paho.Client, err error) {
 		log.Printf("[WARN] Lost connection to MQTT broker: %v", err)
 	}
 
@@ -56,7 +70,51 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to connect to MQTT broker (%s): %w", brokerURI, token.Error())
 	}
 
-	return &Client{pahoClient: client}, nil
+	c.pahoClient = client
+	return c, nil
+}
+
+func (c *Client) resubscribeAll(client paho.Client) {
+	c.mu.RLock()
+	subs := make([]subscriptionRecord, 0, len(c.subscriptions))
+	for _, sub := range c.subscriptions {
+		subs = append(subs, sub)
+	}
+	c.mu.RUnlock()
+
+	for _, sub := range subs {
+		s := sub
+		token := client.Subscribe(s.topic, s.qos, s.handler)
+		go func(rec subscriptionRecord, tok paho.Token) {
+			if tok.WaitTimeout(5*time.Second) && tok.Error() != nil {
+				log.Printf("[ERROR] Failed to auto-re-subscribe to %s on reconnect: %v", rec.topic, tok.Error())
+			} else {
+				log.Printf("[INFO] Successfully registered subscription on connect/reconnect: %s", rec.topic)
+			}
+		}(s, token)
+	}
+}
+
+func (c *Client) subscribeInternal(topic string, qos byte, handler paho.MessageHandler) error {
+	c.mu.Lock()
+	c.subscriptions[topic] = subscriptionRecord{
+		topic:   topic,
+		qos:     qos,
+		handler: handler,
+	}
+	c.mu.Unlock()
+
+	if c.pahoClient == nil || !c.pahoClient.IsConnected() {
+		return errors.New("mqtt client is not connected")
+	}
+
+	token := c.pahoClient.Subscribe(topic, qos, handler)
+	if token.WaitTimeout(5*time.Second) && token.Error() != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", topic, token.Error())
+	}
+
+	log.Printf("[INFO] Subscribed to MQTT topic: %s", topic)
+	return nil
 }
 
 // formatBrokerURI constructs the broker connection URI based on host and port.
@@ -86,53 +144,23 @@ func (c *Client) Publish(topic string, qos byte, retained bool, payload []byte) 
 
 // SubscribeAuthRequest subscribes the worker to factory/auth/request.
 func (c *Client) SubscribeAuthRequest(worker *AuthWorker) error {
-	if c.pahoClient == nil || !c.pahoClient.IsConnected() {
-		return errors.New("mqtt client is not connected")
-	}
-
-	token := c.pahoClient.Subscribe(TopicAuthRequest, 1, func(_ paho.Client, msg paho.Message) {
+	return c.subscribeInternal(TopicAuthRequest, 1, func(_ paho.Client, msg paho.Message) {
 		worker.HandleMessage(msg.Payload())
 	})
-	if token.WaitTimeout(5*time.Second) && token.Error() != nil {
-		return fmt.Errorf("failed to subscribe to %s: %w", TopicAuthRequest, token.Error())
-	}
-
-	log.Printf("[INFO] Subscribed to MQTT topic: %s", TopicAuthRequest)
-	return nil
 }
 
 // SubscribeTelemetry subscribes the worker to factory/telemetry.
 func (c *Client) SubscribeTelemetry(worker *TelemetryWorker) error {
-	if c.pahoClient == nil || !c.pahoClient.IsConnected() {
-		return errors.New("mqtt client is not connected")
-	}
-
-	token := c.pahoClient.Subscribe(TopicTelemetry, 1, func(_ paho.Client, msg paho.Message) {
+	return c.subscribeInternal(TopicTelemetry, 1, func(_ paho.Client, msg paho.Message) {
 		worker.HandleMessage(msg.Payload())
 	})
-	if token.WaitTimeout(5*time.Second) && token.Error() != nil {
-		return fmt.Errorf("failed to subscribe to %s: %w", TopicTelemetry, token.Error())
-	}
-
-	log.Printf("[INFO] Subscribed to MQTT topic: %s", TopicTelemetry)
-	return nil
 }
 
 // SubscribeRollover subscribes the worker to factory/rollover.
 func (c *Client) SubscribeRollover(worker *RolloverWorker) error {
-	if c.pahoClient == nil || !c.pahoClient.IsConnected() {
-		return errors.New("mqtt client is not connected")
-	}
-
-	token := c.pahoClient.Subscribe(TopicRollover, 1, func(_ paho.Client, msg paho.Message) {
+	return c.subscribeInternal(TopicRollover, 1, func(_ paho.Client, msg paho.Message) {
 		worker.HandleMessage(msg.Payload())
 	})
-	if token.WaitTimeout(5*time.Second) && token.Error() != nil {
-		return fmt.Errorf("failed to subscribe to %s: %w", TopicRollover, token.Error())
-	}
-
-	log.Printf("[INFO] Subscribed to MQTT topic: %s", TopicRollover)
-	return nil
 }
 
 
