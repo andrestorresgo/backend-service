@@ -9,12 +9,20 @@ BEGIN
           AND column_name = 'motor_state' 
           AND data_type = 'boolean'
     ) THEN 
-        ALTER TABLE system_state 
+        EXECUTE 'ALTER TABLE system_state 
             ALTER COLUMN motor_state DROP DEFAULT,
             ALTER COLUMN motor_state TYPE VARCHAR(10) USING CASE 
-                WHEN motor_state = TRUE THEN 'ON' 
-                ELSE 'OFF' 
+                WHEN motor_state = TRUE THEN ''ON'' 
+                ELSE ''OFF'' 
             END,
-            ALTER COLUMN motor_state SET DEFAULT 'OFF';
+            ALTER COLUMN motor_state SET DEFAULT ''OFF''';
     END IF;
 END $$;
+
+UPDATE system_state
+SET motor_state = CASE 
+    WHEN UPPER(motor_state) IN ('TRUE', '1', 'ON') THEN 'ON'
+    WHEN UPPER(motor_state) IN ('MEDIUM', '2') THEN 'MEDIUM'
+    ELSE 'OFF'
+END
+WHERE motor_state NOT IN ('ON', 'MEDIUM', 'OFF');

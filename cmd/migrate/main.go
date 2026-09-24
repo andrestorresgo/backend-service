@@ -62,12 +62,14 @@ func main() {
 	var id int
 	var isPaused, servoState bool
 	var motorState string
+	var colType string
+	_ = pool.QueryRow(ctx, "SELECT data_type FROM information_schema.columns WHERE table_name = 'system_state' AND column_name = 'motor_state'").Scan(&colType)
 	if err := pool.QueryRow(ctx, "SELECT id, is_paused, motor_state, servo_state FROM system_state WHERE id = 1").
 		Scan(&id, &isPaused, &motorState, &servoState); err != nil {
 		log.Fatalf("[ERROR] Failed to query system_state table: %v", err)
 	}
-	fmt.Printf("✓ Table 'system_state': singleton row present (is_paused=%v, motor_state=%s, servo_state=%v)\n",
-		isPaused, motorState, servoState)
+	fmt.Printf("✓ Table 'system_state': singleton row present (is_paused=%v, motor_state=%s, servo_state=%v, data_type=%s)\n",
+		isPaused, motorState, servoState, colType)
 
 	// 3. Verify Shape Counts
 	var shapeCount int
